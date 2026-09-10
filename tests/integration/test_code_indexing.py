@@ -206,3 +206,44 @@ def test_unknown_symbol_returns_empty_without_error(
     result = runner.invoke(app, ["symbol", "does_not_exist_anywhere", "--json"])
     assert result.exit_code == 0
     assert json.loads(result.output)["data"]["matches"] == []
+
+
+def test_callers_found_even_when_definition_indexed_after_the_call_site(
+    ragpilot_home: Path, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A caller processed before its target's defining file exists gets a
+    ``target_symbol``-only (unresolved) relationship -- see
+    ``code/resolver.py``. ``callers`` must still surface it once the
+    definition is indexed, rather than only ever seeing edges resolved at
+    the moment they were first recorded (scan order is not guaranteed --
+    see ``sources/scanner.py`` -- so this cannot be left to chance).
+    """
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "consumer.py").write_text(
+        "class DogConsumer:\n    def handle(self):\n        return AnimalService()\n"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert runner.invoke(app, ["init"]).exit_code == 0
+    _add_source(runner, root)
+    assert runner.invoke(app, ["index"]).exit_code == 0
+
+    # At this point "AnimalService" has no definition anywhere: the call
+    # is recorded unresolved (target_symbol="AnimalService", no entity).
+    unresolved = runner.invoke(app, ["callers", "AnimalService", "--json"])
+    assert unresolved.exit_code == 0
+    unresolved_edges = json.loads(unresolved.output)["data"]["edges"]
+    assert unresolved_edges, unresolved.output
+    assert all(e["target_entity_id"] is None for e in unresolved_edges), unresolved_edges
+    assert any(e["source_location"].endswith("consumer.py:3") for e in unresolved_edges)
+
+    (root / "animal_service.py").write_text(
+        "class AnimalService:\n    pass\n"
+    )
+    assert runner.invoke(app, ["index"]).exit_code == 0
+
+    resolved = runner.invoke(app, ["callers", "AnimalService", "--json"])
+    assert resolved.exit_code == 0
+    edges = json.loads(resolved.output)["data"]["edges"]
+    assert any(e["source_location"].endswith("consumer.py:3") for e in edges), edges
