@@ -1,0 +1,136 @@
+"""CRUD for the ``files`` table in a project's ``knowledge.db``."""
+
+from __future__ import annotations
+
+import sqlite3
+
+from ragpilot.core.models import FileKind, FileRecord, FileStatus
+from ragpilot.storage.sqlite import transaction
+
+
+def _row_to_file(row: sqlite3.Row) -> FileRecord:
+    return FileRecord(
+        id=row["id"],
+        source_id=row["source_id"],
+        path=row["path"],
+        kind=FileKind(row["kind"]),
+        size=row["size"],
+        mtime=row["mtime"],
+        content_hash=row["content_hash"],
+        status=FileStatus(row["status"]),
+        generation=row["generation"],
+        parser_version=row["parser_version"],
+        last_indexed_at=row["last_indexed_at"],
+        last_error=row["last_error"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def get_by_path(conn: sqlite3.Connection, source_id: str, path: str) -> FileRecord | None:
+    row = conn.execute(
+        "SELECT * FROM files WHERE source_id = ? AND path = ?", (source_id, path)
+    ).fetchone()
+    return _row_to_file(row) if row is not None else None
+
+
+def get(conn: sqlite3.Connection, file_id: str) -> FileRecord | None:
+    row = conn.execute("SELECT * FROM files WHERE id = ?", (file_id,)).fetchone()
+    return _row_to_file(row) if row is not None else None
+
+
+def list_by_source(conn: sqlite3.Connection, source_id: str) -> list[FileRecord]:
+    rows = conn.execute(
+        "SELECT * FROM files WHERE source_id = ? ORDER BY path", (source_id,)
+    ).fetchall()
+    return [_row_to_file(row) for row in rows]
+
+
+def insert(conn: sqlite3.Connection, file: FileRecord) -> None:
+    with transaction(conn):
+        conn.execute(
+            """
+            INSERT INTO files (
+                id, source_id, path, kind, size, mtime, content_hash, status,
+                generation, parser_version, last_indexed_at, last_error,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                file.id,
+                file.source_id,
+                file.path,
+                file.kind.value,
+                file.size,
+                file.mtime,
+                file.content_hash,
+                file.status.value,
+                file.generation,
+                file.parser_version,
+                file.last_indexed_at,
+                file.last_error,
+                file.created_at,
+                file.updated_at,
+            ),
+        )
+
+
+def update_status(
+    conn: sqlite3.Connection, file_id: str, status: FileStatus, *, updated_at: str
+) -> None:
+    with transaction(conn):
+        conn.execute(
+            "UPDATE files SET status = ?, updated_at = ? WHERE id = ?",
+            (status.value, updated_at, file_id),
+        )
+
+
+def mark_indexed(
+    conn: sqlite3.Connection,
+    file_id: str,
+    *,
+    size: int,
+    mtime: float,
+    content_hash: str | None,
+    status: FileStatus,
+    indexed_at: str,
+) -> None:
+    """Atomically advances a file to its next generation.
+
+    Phase 1 has no derived-entity tables yet, so "delete old generation,
+    insert new" collapses to a single row update -- but it still runs
+    inside one transaction so readers never observe a half-updated file.
+    """
+    with transaction(conn):
+        conn.execute(
+            """
+            UPDATE files
+            SET size = ?, mtime = ?, content_hash = ?, status = ?,
+                generation = generation + 1, last_indexed_at = ?,
+                last_error = NULL, updated_at = ?
+            WHERE id = ?
+            """,
+            (size, mtime, content_hash, status.value, indexed_at, indexed_at, file_id),
+        )
+
+
+def mark_failed(conn: sqlite3.Connection, file_id: str, *, error: str, updated_at: str) -> None:
+    with transaction(conn):
+        conn.execute(
+            "UPDATE files SET status = ?, last_error = ?, updated_at = ? WHERE id = ?",
+            (FileStatus.FAILED.value, error, updated_at, file_id),
+        )
+
+
+def delete(conn: sqlite3.Connection, file_id: str) -> None:
+    with transaction(conn):
+        conn.execute("DELETE FROM index_jobs WHERE file_id = ?", (file_id,))
+        conn.execute("DELETE FROM files WHERE id = ?", (file_id,))
+
+
+def count_by_status(conn: sqlite3.Connection, source_id: str) -> dict[str, int]:
+    rows = conn.execute(
+        "SELECT status, COUNT(*) AS n FROM files WHERE source_id = ? GROUP BY status",
+        (source_id,),
+    ).fetchall()
+    return {row["status"]: row["n"] for row in rows}

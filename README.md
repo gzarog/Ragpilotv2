@@ -16,6 +16,24 @@ This repository is being built out in sequential, independently mergeable phases
 
 See `CONTRIBUTING.md` for development setup and `SECURITY.md` for the security policy.
 
+## Quick start
+
+```bash
+pip install -e ".[dev]"
+ragpilot init
+ragpilot source add /path/to/a/repo/or/docs
+ragpilot index
+ragpilot status --json
+ragpilot doctor
+```
+
+Phase 1 (this repository's current state) ships the CLI, layered configuration,
+the source registry, SQLite storage with WAL and migrations, a durable job
+queue with crash recovery, structured logging, and health checks. It records
+file metadata and marks files indexed via a default "raw" processor — real
+code and document parsing (Tree-sitter, Docling) land in later phases and hook
+into the processor-registry extension point already in place.
+
 ## Design principles
 
 - **Local-first**: source material and derived knowledge stay on disk by default.
