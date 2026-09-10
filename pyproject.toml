@@ -24,6 +24,12 @@ dependencies = [
     # pulls in torch + layout/table-structure model packages for PDF --
     # unavoidable, see docs/CHANGELOG and documents/docling_adapter.py.
     "docling>=2.40,<3",
+    # Official MCP Python SDK. Pinned below 2.x: the 2.x line renamed
+    # ``mcp.server.fastmcp.FastMCP`` to ``mcp.server.mcpserver.MCPServer``
+    # and reshuffled several APIs (see its own import-time migration
+    # error) -- ``mcp/server.py`` targets the well-established 1.x
+    # ``FastMCP`` decorator API.
+    "mcp>=1.2,<2",
 ]
 
 [project.optional-dependencies]

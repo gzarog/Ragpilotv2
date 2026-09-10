@@ -43,6 +43,24 @@ def _document_row(conn: sqlite3.Connection, source_id: str, file: FileRecord) ->
     }
 
 
+def _run(ctx: AppContext, source_id: str | None) -> list[dict[str, Any]]:
+    """Shared with Phase 6's ``ragpilot_documents`` MCP tool -- the same
+    file/document listing either caller sees, just shaped differently.
+    """
+    registry = SourceRegistry(ctx.sources_conn, home=ctx.home)
+    sources = [registry.get(source_id)] if source_id is not None else registry.list()
+
+    rows: list[dict[str, Any]] = []
+    for source in sources:
+        project_id = paths.project_id_for_path(Path(source.path))
+        conn = ctx.project_conn(project_id)
+        for file in files_repo.list_by_source(conn, source.id):
+            if file.kind is not FileKind.DOCUMENT:
+                continue
+            rows.append(_document_row(conn, source.id, file))
+    return rows
+
+
 @cli_command
 def docs(
     source_id: Annotated[
@@ -51,17 +69,7 @@ def docs(
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
     with AppContext.bootstrap() as ctx:
-        registry = SourceRegistry(ctx.sources_conn, home=ctx.home)
-        sources = [registry.get(source_id)] if source_id is not None else registry.list()
-
-        rows: list[dict[str, Any]] = []
-        for source in sources:
-            project_id = paths.project_id_for_path(Path(source.path))
-            conn = ctx.project_conn(project_id)
-            for file in files_repo.list_by_source(conn, source.id):
-                if file.kind is not FileKind.DOCUMENT:
-                    continue
-                rows.append(_document_row(conn, source.id, file))
+        rows = _run(ctx, source_id)
 
         if json_output:
             print_json({"documents": rows})
