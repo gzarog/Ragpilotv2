@@ -214,3 +214,60 @@ def test_semantic_enabled_degrades_gracefully_when_the_model_is_unavailable(
     assert payload["results"] != []
     assert payload["semantic"]["available"] is False
     assert "unavailable" in payload["semantic"]["reason"]
+
+
+def test_lazy_semantic_skips_semantic_search_on_a_high_confidence_hit(
+    ragpilot_home: Path, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Blueprint section 18: with ``search.lazy_semantic`` on, a query the
+    lexical pass already answers with high confidence (an exact symbol
+    match here) must never trigger the embedding model at all.
+    """
+    root = tmp_path / "project"
+    _write_project(root)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("RAGPILOT_SEARCH__SEMANTIC", "true")
+    monkeypatch.setenv("RAGPILOT_SEARCH__LAZY_SEMANTIC", "true")
+
+    assert runner.invoke(app, ["init"]).exit_code == 0
+    assert runner.invoke(app, ["source", "add", str(root)]).exit_code == 0
+    assert runner.invoke(app, ["index"]).exit_code == 0
+
+    def _fail_if_called(texts: list[str]) -> list[list[float]]:
+        raise AssertionError("embedding model must not be invoked for a high-confidence query")
+
+    monkeypatch.setattr(embedder, "embed_texts", _fail_if_called)
+
+    search_result = runner.invoke(app, ["search", "AnimalService", "--json", "--explain"])
+    assert search_result.exit_code == 0, search_result.output
+    payload = json.loads(search_result.output)["data"]
+    assert "semantic" not in payload
+    assert payload["explain"]["lexical_confidence"] == "high"
+    assert payload["explain"]["semantic_skipped"] is True
+    assert all(stage["stage"] != "semantic" for stage in payload["explain"]["stages"])
+
+
+def test_explain_reports_per_stage_timings(
+    ragpilot_home: Path, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "project"
+    _write_project(root)
+    monkeypatch.chdir(tmp_path)
+
+    assert runner.invoke(app, ["init"]).exit_code == 0
+    assert runner.invoke(app, ["source", "add", str(root)]).exit_code == 0
+    assert runner.invoke(app, ["index"]).exit_code == 0
+
+    result = runner.invoke(app, ["search", "AnimalService", "--json", "--explain"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)["data"]
+    explain = payload["explain"]
+    assert explain["query_kind"] == "symbol"
+    stage_names = {stage["stage"] for stage in explain["stages"]}
+    assert {"entities", "documents", "paths", "merge"} <= stage_names
+    assert explain["total_ms"] >= 0
+
+    text_result = runner.invoke(app, ["search", "AnimalService", "--explain"])
+    assert text_result.exit_code == 0, text_result.output
+    assert "Query kind:" in text_result.output
+    assert "Total:" in text_result.output

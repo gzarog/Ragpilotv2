@@ -163,6 +163,67 @@ def test_document_title_match_beats_fts_beats_path(tmp_path: Path) -> None:
         conn.close()
 
 
+def test_alias_lookup_uses_indexed_column_not_full_scan(tmp_path: Path) -> None:
+    """Blueprint section 7: ``Class.member``-shaped queries should match
+    the indexed ``entities.alias`` column (``entities_repo.
+    search_alias_projection``) rather than the previous full-corpus
+    Python scan -- this exercises the same "Betsson.Sportsbook.
+    SettlementService.Process" example from the blueprint itself.
+    """
+    conn = connect(tmp_path / "knowledge.db")
+    try:
+        apply_migrations(conn, "knowledge")
+        files_repo.insert(conn, _file("f1", "/repo/settlement.py", FileKind.CODE))
+        with transaction(conn):
+            entities_repo.insert(
+                conn,
+                _entity(
+                    "e_alias",
+                    "Process",
+                    "Betsson.Sportsbook.SettlementService.Process",
+                    "f1",
+                ),
+                snippet="def Process(self): ...",
+            )
+            # Too few segments to earn an alias -- must never match.
+            entities_repo.insert(
+                conn,
+                _entity("e_short", "Process", "Ns.Process", "f1"),
+                snippet="def Process(): ...",
+            )
+
+        results = _collect(conn, "SettlementService.Process")
+        by_id = {r.id: r for r in results if r.kind == "entity"}
+        assert by_id["e_alias"].tier == lexical.RankTier.ALIAS_SYMBOL
+        # "e_short" still surfaces via the permissive FTS OR-query (its
+        # name/snippet both contain "Process"), but must never be tagged
+        # as an alias match -- only its indexed ``alias`` column decides
+        # that, and "Ns.Process" has too few segments to earn one.
+        if "e_short" in by_id:
+            assert by_id["e_short"].tier != lexical.RankTier.ALIAS_SYMBOL
+    finally:
+        conn.close()
+
+
+def test_path_search_matches_by_token_and_falls_back_to_substring(tmp_path: Path) -> None:
+    """Blueprint section 11: a filename token (indexed via ``path_fts``)
+    and a mid-word fragment (only found via the ``LIKE`` fallback) must
+    both still resolve to the same file.
+    """
+    conn = connect(tmp_path / "knowledge.db")
+    try:
+        apply_migrations(conn, "knowledge")
+        files_repo.insert(conn, _file("f1", "src/ragpilot/retrieval/vectorstore.py", FileKind.CODE))
+
+        token_hits = files_repo.search_path_projection(conn, "vectorstore")
+        assert [f.id for f in token_hits] == ["f1"]
+
+        fragment_hits = files_repo.search_path_projection(conn, "ectorstore")
+        assert [f.id for f in fragment_hits] == ["f1"]
+    finally:
+        conn.close()
+
+
 def test_merge_deduplicates_to_best_tier(tmp_path: Path) -> None:
     conn = connect(tmp_path / "knowledge.db")
     try:
@@ -175,9 +236,7 @@ def test_merge_deduplicates_to_best_tier(tmp_path: Path) -> None:
                 snippet="class SettlementService: settlement logic",
             )
 
-        results = lexical._merge(
-            lexical._search_entities(conn, "s1", "SettlementService", 25)
-        )
+        results = lexical._merge(lexical._search_entities(conn, "s1", "SettlementService", 25))
         matching = [r for r in results if r.id == "e1"]
         assert len(matching) == 1
         assert matching[0].tier == lexical.RankTier.EXACT_SYMBOL

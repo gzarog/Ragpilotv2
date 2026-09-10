@@ -324,3 +324,79 @@ def search_fts(conn: sqlite3.Connection, query: str, *, limit: int = 25) -> list
         """,
         (query, limit),
     ).fetchall()
+
+
+@dataclass(slots=True, frozen=True)
+class DocumentSearchRow:
+    """A document-search hit projected straight out of a ``documents``/
+    ``document_fts JOIN files`` query (blueprint section 9) -- replaces
+    the previous "fetch the document, then a separate ``files_repo.get``
+    per row" N+1 pattern in ``retrieval/lexical.py``.
+    """
+
+    id: str
+    title: str
+    path: str
+    mtime: float
+    snippet: str | None = None
+    heading: str | None = None
+    fts_rank: int = 0
+
+
+def search_title_projection(
+    conn: sqlite3.Connection, title: str, *, limit: int = 25
+) -> list[DocumentSearchRow]:
+    """Case-insensitive exact document-title lookup via the indexed
+    ``idx_documents_title_nocase`` index, replacing the previous
+    ``list_all()`` full-corpus Python scan.
+    """
+    rows = conn.execute(
+        """
+        SELECT d.id, d.title, f.path, f.mtime
+        FROM documents d
+        JOIN files f ON f.id = d.file_id
+        WHERE d.title = ? COLLATE NOCASE
+        LIMIT ?
+        """,
+        (title, limit),
+    ).fetchall()
+    return [
+        DocumentSearchRow(id=row["id"], title=row["title"], path=row["path"], mtime=row["mtime"])
+        for row in rows
+    ]
+
+
+def search_fts_projection(
+    conn: sqlite3.Connection, query: str, *, limit: int = 25
+) -> list[DocumentSearchRow]:
+    rows = conn.execute(
+        """
+        SELECT df.document_id, df.section_id, df.heading_text, df.body,
+               df.doc_title, d.title AS document_title, f.path, f.mtime,
+               bm25(document_fts) AS rank
+        FROM document_fts df
+        JOIN documents d ON d.id = df.document_id
+        JOIN files f ON f.id = d.file_id
+        WHERE document_fts MATCH ?
+        ORDER BY rank
+        LIMIT ?
+        """,
+        (query, limit),
+    ).fetchall()
+    results: list[DocumentSearchRow] = []
+    for rank, row in enumerate(rows):
+        heading = row["heading_text"] or ""
+        body = row["body"] or ""
+        title = row["doc_title"] or row["document_title"] or row["path"]
+        results.append(
+            DocumentSearchRow(
+                id=row["section_id"] or row["document_id"],
+                title=title,
+                path=row["path"],
+                mtime=row["mtime"],
+                snippet=(body or heading)[:280] or None,
+                heading=heading or None,
+                fts_rank=rank,
+            )
+        )
+    return results

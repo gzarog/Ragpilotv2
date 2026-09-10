@@ -8,8 +8,10 @@ from ragpilot import __version__
 from ragpilot.core import paths
 from ragpilot.core.models import IndexingMode, Source, SourceType
 from ragpilot.ops.backup import MANIFEST_FORMAT_VERSION, create_backup
-from ragpilot.storage.migrations import apply_migrations
+from ragpilot.storage.migrations import MIGRATIONS, apply_migrations
 from ragpilot.storage.sqlite import connect
+
+_KNOWLEDGE_SCHEMA_VERSION = len(MIGRATIONS["knowledge"])
 
 
 def _make_source(path: str, *, now: str = "2026-01-01T00:00:00+00:00") -> Source:
@@ -64,7 +66,7 @@ def test_create_backup_includes_every_indexed_project(tmp_path: Path) -> None:
 
     archive_path, manifest = create_backup(home=home, sources=[source])
 
-    assert manifest.projects == {project_id: 6}
+    assert manifest.projects == {project_id: _KNOWLEDGE_SCHEMA_VERSION}
     assert manifest.sources[0]["id"] == "src_test"
     assert manifest.sources[0]["project_id"] == project_id
 
@@ -75,7 +77,7 @@ def test_create_backup_includes_every_indexed_project(tmp_path: Path) -> None:
         manifest_member = tar.extractfile("./manifest.json")
         assert manifest_member is not None
         on_disk_manifest = json.loads(manifest_member.read())
-    assert on_disk_manifest["projects"] == {project_id: 6}
+    assert on_disk_manifest["projects"] == {project_id: _KNOWLEDGE_SCHEMA_VERSION}
 
 
 def test_create_backup_default_destination_lives_under_backups_dir(tmp_path: Path) -> None:

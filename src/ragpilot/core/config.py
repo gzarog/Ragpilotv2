@@ -56,10 +56,47 @@ class CodeConfig(BaseModel):
     enabled: bool = True
 
 
+class SearchVectorConfig(BaseModel):
+    """Phase 3's ANN backend selection and rebuild policy (blueprint
+    section 31/32). ``engine="auto"`` tries ``usearch`` first and falls
+    back to the pure-Python brute-force scan if it can't be loaded (a
+    broken install, an unsupported platform) -- see ``retrieval/ann.py``.
+    Vectors are always L2-normalized (``retrieval/embedder.py``), so
+    there is no separate ``normalize`` toggle: it was never actually a
+    choice to expose.
+    """
+
+    engine: str = "auto"  # "auto" | "usearch" | "bruteforce"
+    rebuild_deleted_ratio: float = 0.15
+
+
+class SearchCacheConfig(BaseModel):
+    """Phase 6's query-result cache (blueprint section 23)."""
+
+    enabled: bool = True
+    max_queries: int = 256
+
+
 class SearchConfig(BaseModel):
     lexical: bool = True
     graph: bool = True
     semantic: bool = False
+    # Blueprint section 18: skip semantic search entirely once the
+    # lexical pass already found a high-confidence hit (an exact/
+    # qualified/alias symbol or an exact title match). Defaults to
+    # ``False`` -- ``search.semantic``'s own existing contract is "when
+    # this is on, ``ragpilot search``/``explore`` always attach a
+    # semantic section", and this project's semantic-retrieval test
+    # suite pins that behavior; opting into ``lazy_semantic`` trades a
+    # bit of that always-attached guarantee for lower latency on queries
+    # the lexical pass already nailed.
+    lazy_semantic: bool = False
+    # Candidate budget (blueprint section 20): how many nearest
+    # neighbors the ANN/brute-force backend is asked for internally,
+    # independent of ``--limit``'s final display count.
+    semantic_top_k: int = 30
+    vector: SearchVectorConfig = Field(default_factory=SearchVectorConfig)
+    cache: SearchCacheConfig = Field(default_factory=SearchCacheConfig)
 
 
 class ContextConfig(BaseModel):

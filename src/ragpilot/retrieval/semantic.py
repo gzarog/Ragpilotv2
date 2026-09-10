@@ -111,7 +111,12 @@ def _hit_from_row(conn: Any, source_id: str, row: EmbeddingRow, score: float) ->
 
 
 def semantic_search(
-    ctx: AppContext, query: str, *, config: SearchConfig, limit: int = DEFAULT_LIMIT
+    ctx: AppContext,
+    query: str,
+    *,
+    config: SearchConfig,
+    limit: int = DEFAULT_LIMIT,
+    candidate_k: int | None = None,
 ) -> SemanticSearchResult:
     """Returns a skipped/unavailable result rather than raising whenever
     semantic search cannot actually run right now -- see the module
@@ -120,6 +125,11 @@ def semantic_search(
     path never even imports ``torch``/``transformers`` -- see
     ``retrieval/embedder.py``), but re-checked here too since this is the
     one function that could otherwise silently do real ML work.
+
+    ``candidate_k`` (blueprint section 20's candidate budget) sizes the
+    internal nearest-neighbor search independently of ``limit``, the
+    final number of results returned -- defaults to ``limit`` itself when
+    omitted, i.e. today's behavior of "fetch and return the same count".
     """
     query = query.strip()
     if not config.semantic:
@@ -135,6 +145,7 @@ def semantic_search(
         )
 
     connections = {source_id: conn for source_id, _path, conn in all_project_connections(ctx)}
+    k = candidate_k if candidate_k is not None else limit
 
     scored: list[tuple[str, EmbeddingRow, float]] = []
     for source_id, conn in connections.items():
@@ -143,7 +154,7 @@ def semantic_search(
             continue
         candidates = [(row.id, row.vector) for row in rows]
         by_id = {row.id: row for row in rows}
-        for candidate in vectorstore.top_k(query_vector, candidates, k=limit):
+        for candidate in vectorstore.top_k(query_vector, candidates, k=k):
             scored.append((source_id, by_id[candidate.key], candidate.score))
 
     if not scored:

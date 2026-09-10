@@ -9,9 +9,54 @@ transaction (see ``code/processor.py``), mirroring the generational pattern
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
 
 from ragpilot.core.models import Entity, EntityType
 from ragpilot.storage.repositories import links_repo
+
+# Mirrors ``knowledge/linker.py``'s ``match_alias``/``_MIN_ALIAS_SEGMENTS``:
+# the qualified name's final two dotted segments (its class-and-member
+# form), skipped below this many segments so the alias never just
+# duplicates the qualified name itself. Kept as its own copy here (rather
+# than importing from ``knowledge/linker.py`` or ``retrieval/lexical.py``)
+# following this project's existing precedent of a small, independently
+# documented duplicate over a new cross-module dependency for one
+# three-line rule.
+_MIN_ALIAS_SEGMENTS = 3
+
+
+def compute_alias(qualified_name: str) -> str | None:
+    """The indexed ``entities.alias`` value for ``qualified_name``, or
+    ``None`` when it has too few dotted segments to be worth aliasing
+    (see ``_MIN_ALIAS_SEGMENTS``).
+    """
+    segments = qualified_name.split(".")
+    if len(segments) < _MIN_ALIAS_SEGMENTS:
+        return None
+    return ".".join(segments[-2:])
+
+
+@dataclass(slots=True, frozen=True)
+class EntitySearchRow:
+    """A lexical-search hit projected straight out of a ``entities JOIN
+    files`` query (blueprint section 9): only the fields ``retrieval/
+    lexical.py`` actually renders, with the file's ``path``/``mtime``
+    already joined in. Replaces the previous "fetch a full ``Entity``,
+    then a separate ``files_repo.get`` per row" N+1 pattern -- see
+    ``search_exact_projection``/``search_alias_projection``/
+    ``search_fts_projection`` below, the sole producers of this type.
+    """
+
+    id: str
+    name: str
+    qualified_name: str
+    kind: EntityType
+    signature: str | None
+    start_line: int
+    end_line: int
+    path: str
+    mtime: float
+    fts_rank: int = 0
 
 
 def _row_to_entity(row: sqlite3.Row) -> Entity:
@@ -57,8 +102,8 @@ def insert(conn: sqlite3.Connection, entity: Entity, *, snippet: str) -> None:
         INSERT INTO entities (
             id, source_id, file_id, kind, name, qualified_name, language,
             parent_id, signature, start_line, end_line, start_col, end_col,
-            generation, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            generation, created_at, updated_at, alias
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             entity.id,
@@ -77,6 +122,7 @@ def insert(conn: sqlite3.Connection, entity: Entity, *, snippet: str) -> None:
             entity.generation,
             entity.created_at,
             entity.updated_at,
+            compute_alias(entity.qualified_name),
         ),
     )
     conn.execute(
@@ -163,3 +209,73 @@ def search_fts(conn: sqlite3.Connection, query: str, *, limit: int = 25) -> list
         (query, limit),
     ).fetchall()
     return [_row_to_entity(row) for row in rows]
+
+
+def _row_to_search_row(row: sqlite3.Row, *, fts_rank: int = 0) -> EntitySearchRow:
+    return EntitySearchRow(
+        id=row["id"],
+        name=row["name"],
+        qualified_name=row["qualified_name"],
+        kind=EntityType(row["kind"]),
+        signature=row["signature"],
+        start_line=row["start_line"],
+        end_line=row["end_line"],
+        path=row["path"],
+        mtime=row["mtime"],
+        fts_rank=fts_rank,
+    )
+
+
+_PROJECTION_SELECT = """
+    SELECT e.id, e.name, e.qualified_name, e.kind, e.signature,
+           e.start_line, e.end_line, f.path, f.mtime
+    FROM entities e
+    JOIN files f ON f.id = e.file_id
+"""
+
+
+def search_exact_projection(
+    conn: sqlite3.Connection, name_or_qualified_name: str
+) -> list[EntitySearchRow]:
+    """``search()``'s exact name/qualified-name lookup, projected with its
+    file already joined in -- see ``EntitySearchRow``.
+    """
+    rows = conn.execute(
+        _PROJECTION_SELECT + "WHERE e.name = ? OR e.qualified_name = ? "
+        "ORDER BY e.qualified_name, e.file_id, e.start_line",
+        (name_or_qualified_name, name_or_qualified_name),
+    ).fetchall()
+    return [_row_to_search_row(row) for row in rows]
+
+
+def search_alias_projection(
+    conn: sqlite3.Connection, alias: str, *, limit: int = 25
+) -> list[EntitySearchRow]:
+    """Indexed ``entities.alias`` lookup (blueprint section 7), replacing
+    the previous ``list_all()`` full-corpus Python scan.
+    """
+    rows = conn.execute(
+        _PROJECTION_SELECT + "WHERE e.alias = ? "
+        "ORDER BY e.qualified_name, e.file_id, e.start_line LIMIT ?",
+        (alias, limit),
+    ).fetchall()
+    return [_row_to_search_row(row) for row in rows]
+
+
+def search_fts_projection(
+    conn: sqlite3.Connection, query: str, *, limit: int = 25
+) -> list[EntitySearchRow]:
+    rows = conn.execute(
+        """
+        SELECT e.id, e.name, e.qualified_name, e.kind, e.signature,
+               e.start_line, e.end_line, f.path, f.mtime, bm25(code_fts) AS rank
+        FROM code_fts
+        JOIN entities e ON e.id = code_fts.entity_id
+        JOIN files f ON f.id = e.file_id
+        WHERE code_fts MATCH ?
+        ORDER BY rank
+        LIMIT ?
+        """,
+        (query, limit),
+    ).fetchall()
+    return [_row_to_search_row(row, fts_rank=rank) for rank, row in enumerate(rows)]
