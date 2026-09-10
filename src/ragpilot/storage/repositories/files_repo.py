@@ -47,6 +47,24 @@ def list_by_source(conn: sqlite3.Connection, source_id: str) -> list[FileRecord]
     return [_row_to_file(row) for row in rows]
 
 
+def search_by_substring(
+    conn: sqlite3.Connection, query: str, *, limit: int = 25
+) -> list[FileRecord]:
+    """Files whose path contains ``query``, path-ordered.
+
+    A plain ``LIKE`` scan, not a new index: Phase 5's ``ragpilot search``
+    is the only caller of this "match by path fragment" lookup, and at
+    the scale one local ``knowledge.db`` holds, a sequential scan is fast
+    enough without paying index-maintenance cost on every file write for
+    a read path this narrow.
+    """
+    rows = conn.execute(
+        "SELECT * FROM files WHERE path LIKE ? ORDER BY path LIMIT ?",
+        (f"%{query}%", limit),
+    ).fetchall()
+    return [_row_to_file(row) for row in rows]
+
+
 def insert(conn: sqlite3.Connection, file: FileRecord) -> None:
     with transaction(conn):
         conn.execute(

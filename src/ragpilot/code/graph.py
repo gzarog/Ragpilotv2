@@ -146,16 +146,22 @@ def traverse_symbol(
 ) -> tuple[list[SourceMatch], list[TraversalEdge]]:
     """Resolves ``name`` to entities and walks the graph from each match.
 
-    When ``name`` matches no known entity, ``direction="incoming"`` falls
-    back to unresolved (name-only) edges recorded against that literal
-    symbol -- e.g. calls to a function no file in the project defines --
-    since that is still a meaningful, non-empty answer for callers/
-    references. ``outgoing`` has no such fallback: with no resolved
-    entity there is nothing to walk callees *from*.
+    ``direction="incoming"`` also merges in unresolved (name-only) edges
+    recorded against the literal ``name`` -- not just when ``name``
+    matches no entity at all, but *even when it does*: a caller processed
+    earlier in the same indexing run than the file defining ``name`` (scan
+    order is not guaranteed -- see ``sources/scanner.py``) has its call
+    resolved by ``code/resolver.py`` only down to ``target_symbol``, never
+    retroactively upgraded to ``target_entity_id`` once the definition is
+    indexed. Without this merge such a caller is silently invisible to
+    ``callers``/``impact`` despite being a real, evidenced edge. ``outgoing``
+    has no such fallback: with no resolved entity there is nothing to walk
+    callees *from*.
     """
     matches = find_symbol_matches(ctx, name)
     edges: list[TraversalEdge] = []
     if matches:
+        seen_conns: list[sqlite3.Connection] = []
         for match in matches:
             conn = conn_for_source_path(ctx, match.source_path)
             edges.extend(
@@ -168,6 +174,13 @@ def traverse_symbol(
                     limit=limit,
                 )
             )
+            if direction == "incoming" and conn not in seen_conns:
+                seen_conns.append(conn)
+                edges.extend(
+                    unresolved_symbol_edges(
+                        conn, name, relationship_types=relationship_types, limit=limit
+                    )
+                )
         edges.sort(key=lambda e: (e.depth, *_sort_key(e.relationship)))
         return matches, edges[:limit]
 

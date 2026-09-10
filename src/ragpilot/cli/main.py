@@ -10,10 +10,13 @@ from ragpilot.cli import (
     config_cmd,
     docs,
     doctor,
+    explore,
+    impact,
     index,
     init,
     link,
     references,
+    search,
     source,
     status,
     symbol,
@@ -42,6 +45,11 @@ app.command("callers", help="Show entities that call the given symbol.")(callers
 app.command("callees", help="Show entities the given symbol calls.")(callees.callees)
 app.command("references", help="Show all edges touching the given symbol.")(references.references)
 app.command("docs", help="List indexed documents.")(docs.docs)
+app.command("search", help="Lexical search across code and documents.")(search.search)
+app.command("impact", help="Show blast-radius impact analysis for a symbol.")(impact.impact)
+app.command(
+    "explore", help="Explore a query using all deterministic retrieval strategies."
+)(explore.explore)
 
 
 if __name__ == "__main__":

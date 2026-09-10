@@ -53,6 +53,17 @@ class SearchConfig(BaseModel):
     semantic: bool = False
 
 
+class ContextConfig(BaseModel):
+    """Phase 5's context-builder budget (blueprint section 27) -- caps how
+    much evidence ``retrieval/context_builder.py`` will hand back to a
+    caller (``explore`` now, Phase 6's MCP tools later) in one response.
+    """
+
+    max_chars: int = 30000
+    max_files: int = 20
+    max_graph_nodes: int = 100
+
+
 class McpConfig(BaseModel):
     enabled: bool = True
 
@@ -78,6 +89,7 @@ class RagpilotConfig(BaseModel):
     documents: DocumentsConfig = Field(default_factory=DocumentsConfig)
     code: CodeConfig = Field(default_factory=CodeConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
+    context: ContextConfig = Field(default_factory=ContextConfig)
     mcp: McpConfig = Field(default_factory=McpConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
     privacy: PrivacyConfig = Field(default_factory=PrivacyConfig)
@@ -91,6 +103,7 @@ _KNOWN_SECTIONS = {
     "documents",
     "code",
     "search",
+    "context",
     "mcp",
     "api",
     "privacy",

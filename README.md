@@ -32,6 +32,9 @@ ragpilot references MyClass
 ragpilot docs --json
 ragpilot link list --json
 ragpilot link add MyClass.my_method path/to/document.md
+ragpilot search "MyClass"
+ragpilot impact MyClass
+ragpilot explore "what breaks if MyClass changes?"
 ```
 
 Phase 1 shipped the CLI, layered configuration, the source registry, SQLite
@@ -65,7 +68,7 @@ downloads layout/table-structure model weights on first use -- tests that
 exercise it are marked `docling_pdf` and excluded from the default test run
 (see CONTRIBUTING.md).
 
-Phase 4 (this repository's current state) adds the unified knowledge model:
+Phase 4 adds the unified knowledge model:
 `ragpilot index` now also runs a cross-domain linking pass, after each
 source's normal per-file indexing completes, connecting code entities to
 the documents that describe them. It matches on exact and fully-qualified
@@ -81,6 +84,21 @@ semantic linking is explicitly out of scope (no embedding infrastructure
 exists yet -- that is Phase 9 -- and the blueprint bars semantic
 similarity from silently minting high-confidence facts even once it
 does). The MCP server lands in a later phase.
+
+Phase 5 (this repository's current state) adds retrieval: `ragpilot search
+QUERY` merges exact/qualified-identifier matches, `code_fts`/
+`document_fts` hits, file-path matches, and document title/heading
+matches into one ranked list. `ragpilot impact SYMBOL` reports a symbol's
+defining location, callers/callees (Phase 2's CALLS graph), cross-domain
+document links (Phase 4), a small naming-convention "tests" heuristic, and
+a documented LOW/MEDIUM/HIGH "blast radius" bucket. `ragpilot explore
+"QUERY"` is the primary retrieval command: a deterministic (no LLM) query
+planner picks which of the above strategies a query needs -- e.g. "who
+calls X" routes to graph traversal, "documents about X" routes to FTS --
+and assembles the result through a budgeted, deduplicated evidence
+package (`context:` config: `max_chars`/`max_files`/`max_graph_nodes`).
+Real semantic/vector search stays disabled (`search.semantic: false`);
+`retrieval/semantic.py` is only the seam Phase 9 will implement.
 
 ## Design principles
 
