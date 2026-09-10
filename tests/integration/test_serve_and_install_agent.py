@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import typer.main
 from typer.testing import CliRunner
 
 from ragpilot.cli.main import app
@@ -89,8 +90,14 @@ def test_install_agent_write_writes_exactly_that_content_and_nothing_else(
 def test_serve_help_documents_the_mcp_flag(ragpilot_home: Path, runner: CliRunner) -> None:
     result = runner.invoke(app, ["serve", "--help"])
     assert result.exit_code == 0
-    # Rich soft-wraps option flags across lines in a narrow captured
-    # console (width varies by environment/terminal), so compare after
-    # collapsing hard line breaks -- see the same treatment above.
-    unwrapped = result.output.replace("\n", "")
-    assert "--mcp" in unwrapped
+
+    # Not a substring check on the rendered --help text: Rich's console
+    # width detection (and therefore where/whether it wraps or truncates
+    # a long option row) varies by environment in ways collapsing "\n"
+    # alone doesn't reliably fix -- observed passing locally under a
+    # forced COLUMNS=80 but still failing on GitHub Actions' actual
+    # (narrower, differently-detected) width. Ask Click directly instead,
+    # which is exact and width-independent.
+    serve_command = typer.main.get_command(app).get_command(None, "serve")  # type: ignore[union-attr]
+    assert serve_command is not None
+    assert any("--mcp" in opt.opts for opt in serve_command.params)
