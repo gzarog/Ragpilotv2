@@ -22,9 +22,14 @@ jobs:
       # OCR-off, GPU-free pipeline needs) -- installing the CPU-only build
       # first so torch's own resolution is already satisfied keeps this
       # job's install size and time reasonable. macOS/Windows PyPI wheels
-      # are CPU-only already, so this is Linux-only.
+      # are CPU-only already, so this is Linux-only. torchvision must come
+      # from the SAME index in the SAME command: resolving it separately
+      # (e.g. later, from default PyPI, as a transitive dependency) can
+      # pick a torchvision build compiled against a different torch build
+      # than the one just installed, which fails at import time with
+      # "operator torchvision::nms does not exist".
       - name: Install CPU-only torch (Linux runners pull CUDA by default)
-        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
       - name: Install project
         run: pip install -e ".[dev]"
       - name: Ruff
@@ -48,7 +53,7 @@ jobs:
           cache-dependency-path: pyproject.toml
       - name: Install CPU-only torch (Linux runners pull CUDA by default)
         if: matrix.os == 'ubuntu-latest'
-        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
       - name: Install project
         run: pip install -e ".[dev]"
       - name: Pytest
@@ -75,7 +80,7 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
       - name: Install CPU-only torch (Linux runners pull CUDA by default)
-        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
       - name: Install project
         run: pip install -e ".[dev]"
       - name: Cache Docling/Hugging Face model weights
