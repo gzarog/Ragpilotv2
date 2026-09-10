@@ -38,6 +38,9 @@ MIGRATIONS: dict[DatabaseKind, tuple[Migration, ...]] = {
         Migration(4, "cross_domain_linking", schema.KNOWLEDGE_DB_V4),
         Migration(5, "embeddings", schema.KNOWLEDGE_DB_V5),
         Migration(6, "pdf_conversion_cache", schema.KNOWLEDGE_DB_V6),
+        Migration(7, "entity_alias_and_title_index", schema.KNOWLEDGE_DB_V7),
+        Migration(8, "path_fts", schema.KNOWLEDGE_DB_V8),
+        Migration(9, "vector_items", schema.KNOWLEDGE_DB_V9),
     ),
 }
 

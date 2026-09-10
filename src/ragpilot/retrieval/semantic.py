@@ -28,14 +28,23 @@ this exact seam.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from ragpilot.code.graph import all_project_connections
+from ragpilot.core import paths
 from ragpilot.core.config import SearchConfig
 from ragpilot.core.lifecycle import AppContext
 from ragpilot.core.models import EmbeddingSubjectType
-from ragpilot.retrieval import embedder, vectorstore
-from ragpilot.storage.repositories import documents_repo, embeddings_repo, entities_repo, files_repo
+from ragpilot.retrieval import ann, embedder, vectorstore
+from ragpilot.retrieval import cache as search_cache
+from ragpilot.storage.repositories import (
+    documents_repo,
+    embeddings_repo,
+    entities_repo,
+    files_repo,
+    vector_items_repo,
+)
 from ragpilot.storage.repositories.embeddings_repo import EmbeddingRow
 
 DEFAULT_LIMIT = 15
@@ -110,8 +119,98 @@ def _hit_from_row(conn: Any, source_id: str, row: EmbeddingRow, score: float) ->
     )
 
 
+def _search_source_via_ann(
+    conn: Any,
+    *,
+    source_id: str,
+    project_id: str,
+    home: Path,
+    query_vector: list[float],
+    k: int,
+    model_id: str,
+    engine: str,
+) -> list[SemanticHit] | None:
+    """One source's ANN-backed candidates plus their batched metadata
+    lookup (blueprint sections 12/47), or ``None`` when this source has
+    no ANN data available at all -- the signal ``semantic_search`` uses
+    to fall back to its original full-scan path for that source only.
+
+    The brute-force backend has no persistence of its own (see
+    ``retrieval/ann.py``'s ``BruteForceAnnIndex`` docstring), so it is
+    seeded here from ``vector_items`` directly -- still one batched read,
+    not the one-candidate-at-a-time cost the pre-ANN brute-force path had.
+    """
+    dim = embeddings_repo.get_dim_for_model(conn, model_id)
+    if dim is None:
+        return None
+
+    index_path = paths.project_vector_index_path(project_id, home)
+    meta_path = paths.project_vector_meta_path(project_id, home)
+    if engine != "bruteforce" and not ann.is_index_compatible(
+        meta_path, model_id=model_id, ndim=dim
+    ):
+        # Either no index has ever been built for this source, or it was
+        # built for a since-changed model/dimensionality -- never load a
+        # mismatched on-disk index (blueprint section 48), fall through
+        # to the brute-force-over-vector_items path below instead.
+        engine = "bruteforce"
+
+    index, backend = ann.select_backend(engine, ndim=dim, index_path=index_path)
+    if backend == "bruteforce" and len(index) == 0:
+        all_vectors = vector_items_repo.list_all_with_vectors(conn, model_id=model_id)
+        if not all_vectors:
+            return None
+        index.add([vid for vid, _ in all_vectors], [vec for _, vec in all_vectors])
+    if len(index) == 0:
+        return None
+
+    raw_hits = index.search(query_vector, k)
+    if not raw_hits:
+        return []
+    metadata = vector_items_repo.batch_metadata_lookup(
+        conn, [vector_id for vector_id, _ in raw_hits]
+    )
+    hits: list[SemanticHit] = []
+    for vector_id, score in raw_hits:
+        row = metadata.get(vector_id)
+        if row is None:
+            continue
+        hits.append(
+            SemanticHit(
+                kind=row.kind,
+                id=row.id,
+                title=row.title,
+                path=row.path,
+                source_id=source_id,
+                score=score,
+                snippet=row.snippet,
+                location=row.location,
+            )
+        )
+    return hits
+
+
+def _embed_query_cached(query: str, *, config: SearchConfig) -> list[float] | None:
+    """A cached query embedding (blueprint section 24), or ``None`` on a
+    cache miss/disabled cache -- the caller falls back to
+    ``embedder.embed_texts`` and stores the result itself, since only it
+    knows whether that call actually succeeded.
+    """
+    if not config.cache.enabled:
+        return None
+    embedding_cache = search_cache.get_query_embedding_cache(config.cache.max_query_embeddings)
+    return embedding_cache.get(
+        search_cache.embedding_cache_key(query=query, model_id=embedder.EMBEDDING_MODEL_ID)
+    )
+
+
 def semantic_search(
-    ctx: AppContext, query: str, *, config: SearchConfig, limit: int = DEFAULT_LIMIT
+    ctx: AppContext,
+    query: str,
+    *,
+    config: SearchConfig,
+    limit: int = DEFAULT_LIMIT,
+    candidate_k: int | None = None,
 ) -> SemanticSearchResult:
     """Returns a skipped/unavailable result rather than raising whenever
     semantic search cannot actually run right now -- see the module
@@ -120,6 +219,11 @@ def semantic_search(
     path never even imports ``torch``/``transformers`` -- see
     ``retrieval/embedder.py``), but re-checked here too since this is the
     one function that could otherwise silently do real ML work.
+
+    ``candidate_k`` (blueprint section 20's candidate budget) sizes the
+    internal nearest-neighbor search independently of ``limit``, the
+    final number of results returned -- defaults to ``limit`` itself when
+    omitted, i.e. today's behavior of "fetch and return the same count".
     """
     query = query.strip()
     if not config.semantic:
@@ -127,35 +231,63 @@ def semantic_search(
     if not query:
         return SemanticSearchResult(available=True, reason="empty query", results=())
 
-    try:
-        query_vector = embedder.embed_texts([query])[0]
-    except embedder.EmbeddingModelUnavailableError as exc:
-        return SemanticSearchResult(
-            available=False, reason=f"embedding model unavailable: {exc}", results=()
+    query_vector = _embed_query_cached(query, config=config)
+    if query_vector is None:
+        try:
+            query_vector = embedder.embed_texts([query])[0]
+        except embedder.EmbeddingModelUnavailableError as exc:
+            return SemanticSearchResult(
+                available=False, reason=f"embedding model unavailable: {exc}", results=()
+            )
+        if config.cache.enabled:
+            embedding_cache = search_cache.get_query_embedding_cache(
+                config.cache.max_query_embeddings
+            )
+            embedding_cache.set(
+                search_cache.embedding_cache_key(query=query, model_id=embedder.EMBEDDING_MODEL_ID),
+                query_vector,
+            )
+
+    k = candidate_k if candidate_k is not None else limit
+    model_id = embedder.EMBEDDING_MODEL_ID
+
+    hits: list[SemanticHit] = []
+    for source_id, source_path, conn in all_project_connections(ctx):
+        project_id = paths.project_id_for_path(Path(source_path))
+        ann_hits = _search_source_via_ann(
+            conn,
+            source_id=source_id,
+            project_id=project_id,
+            home=ctx.home,
+            query_vector=query_vector,
+            k=k,
+            model_id=model_id,
+            engine=config.vector.engine,
         )
+        if ann_hits is not None:
+            hits.extend(ann_hits)
+            continue
 
-    connections = {source_id: conn for source_id, _path, conn in all_project_connections(ctx)}
-
-    scored: list[tuple[str, EmbeddingRow, float]] = []
-    for source_id, conn in connections.items():
-        rows = embeddings_repo.list_by_model(conn, embedder.EMBEDDING_MODEL_ID)
+        # Backward-compatible fallback (blueprint section 29): this
+        # source has embeddings but no ``vector_items`` yet (indexed
+        # before this feature existed, or the ANN index hasn't been
+        # synced since) -- the original brute-force scan still works
+        # unchanged, and the next reindex of any touched file starts
+        # populating ``vector_items`` for it.
+        rows = embeddings_repo.list_by_model(conn, model_id)
         if not rows:
             continue
         candidates = [(row.id, row.vector) for row in rows]
         by_id = {row.id: row for row in rows}
-        for candidate in vectorstore.top_k(query_vector, candidates, k=limit):
-            scored.append((source_id, by_id[candidate.key], candidate.score))
+        for candidate in vectorstore.top_k(query_vector, candidates, k=k):
+            hit = _hit_from_row(conn, source_id, by_id[candidate.key], candidate.score)
+            if hit is not None:
+                hits.append(hit)
 
-    if not scored:
+    if not hits:
         return SemanticSearchResult(
             available=True, reason="no embeddings computed for this project yet", results=()
         )
-
-    hits: list[SemanticHit] = []
-    for source_id, row, score in scored:
-        hit = _hit_from_row(connections[source_id], source_id, row, score)
-        if hit is not None:
-            hits.append(hit)
 
     hits.sort(key=lambda h: (-h.score, h.path, h.id))
     return SemanticSearchResult(available=True, reason="ok", results=tuple(hits[:limit]))

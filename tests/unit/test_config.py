@@ -80,6 +80,38 @@ def test_env_var_type_coercion(tmp_path: Path) -> None:
     assert config.indexing.follow_symlinks is True
 
 
+def test_search_defaults_preserve_existing_semantic_behavior(tmp_path: Path) -> None:
+    """Blueprint sections 18/31/32: the new knobs default to what the
+    codebase already did before this redesign -- ``lazy_semantic`` off
+    (semantic search always attached once ``search.semantic`` is on) and
+    ``vector.engine="auto"`` (tries USearch, falls back to brute-force).
+    """
+    home = tmp_path / "home"
+    cwd = tmp_path / "cwd"
+    home.mkdir()
+    cwd.mkdir()
+    config = load_config(home=home, cwd=cwd, environ={})
+    assert config.search.lazy_semantic is False
+    assert config.search.semantic_top_k == 30
+    assert config.search.vector.engine == "auto"
+    assert config.search.vector.rebuild_deleted_ratio == 0.15
+    assert config.search.cache.enabled is True
+    assert config.search.cache.max_queries == 256
+
+
+def test_nested_search_vector_env_override(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    cwd = tmp_path / "cwd"
+    home.mkdir()
+    cwd.mkdir()
+    config = load_config(
+        home=home,
+        cwd=cwd,
+        environ={"RAGPILOT_SEARCH__VECTOR__ENGINE": "bruteforce"},
+    )
+    assert config.search.vector.engine == "bruteforce"
+
+
 def test_unrelated_env_vars_are_ignored(tmp_path: Path) -> None:
     home = tmp_path / "home"
     cwd = tmp_path / "cwd"

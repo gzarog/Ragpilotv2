@@ -23,6 +23,7 @@ dependency -- see the module docstring split in ``retrieval/embedder.py``.
 
 from __future__ import annotations
 
+import heapq
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -66,11 +67,18 @@ def top_k(
     among ties (two equally-similar vectors have no other principled
     order, but a stable one keeps repeated runs and ``--json`` output
     reproducible).
+
+    Uses ``heapq.nsmallest`` over ``(-score, key)`` -- exactly the sort key
+    that would produce this same ordering via a full sort -- rather than
+    sorting every candidate: O(N log K) instead of O(N log N), which
+    matters once ``N`` (every current-model embedding) is large and ``K``
+    (the caller's requested top-K) stays small (blueprint section 17).
     """
-    scored = [
-        ScoredCandidate(key=key, score=cosine_similarity(query_vector, vector))
+    if k <= 0:
+        return []
+    scored = (
+        ScoredCandidate(key=key, score=score)
         for key, vector in candidates
-    ]
-    scored = [c for c in scored if c.score >= min_score]
-    scored.sort(key=lambda c: (-c.score, c.key))
-    return scored[:k]
+        if (score := cosine_similarity(query_vector, vector)) >= min_score
+    )
+    return heapq.nsmallest(k, scored, key=lambda c: (-c.score, c.key))

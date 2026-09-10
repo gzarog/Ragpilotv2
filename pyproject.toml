@@ -60,6 +60,19 @@ dependencies = [
     # dependency (via `mcp`); declared explicitly since first-party code
     # now imports it directly.
     "httpx>=0.27",
+    # Search performance redesign: retrieval/ann.py's production ANN
+    # backend (HNSW), replacing brute-force cosine similarity over every
+    # current-model embedding as the default semantic-search path. Pure
+    # local library, no server, persistent on-disk index -- matches this
+    # project's local-first design the way a loadable SQLite extension
+    # (e.g. sqlite-vec) could not guarantee across every supported
+    # platform/Python build (see retrieval/vectorstore.py's own
+    # docstring for that same cross-platform concern). Never a hard
+    # requirement for semantic search to function: retrieval/ann.py
+    # falls back to the pure-Python brute-force scan on any import or
+    # native-load failure, so a broken install degrades rather than
+    # crashes.
+    "usearch>=2.16,<3",
 ]
 
 [project.optional-dependencies]

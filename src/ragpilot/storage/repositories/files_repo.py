@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 
 from ragpilot.core.models import FileKind, FileRecord, FileStatus
@@ -52,17 +53,49 @@ def search_by_substring(
 ) -> list[FileRecord]:
     """Files whose path contains ``query``, path-ordered.
 
-    A plain ``LIKE`` scan, not a new index: Phase 5's ``ragpilot search``
-    is the only caller of this "match by path fragment" lookup, and at
-    the scale one local ``knowledge.db`` holds, a sequential scan is fast
-    enough without paying index-maintenance cost on every file write for
-    a read path this narrow.
+    A plain ``LIKE`` scan: the fallback ``search_path_projection`` below
+    uses when ``path_fts`` finds nothing (e.g. a mid-word fragment like
+    "ectorstore" that doesn't align to a token boundary) -- at the scale
+    one local ``knowledge.db`` holds, that fallback scan is fast enough
+    without needing its own index.
     """
     rows = conn.execute(
         "SELECT * FROM files WHERE path LIKE ? ORDER BY path LIMIT ?",
         (f"%{query}%", limit),
     ).fetchall()
     return [_row_to_file(row) for row in rows]
+
+
+def _path_fts_query(text: str) -> str | None:
+    tokens = re.findall(r"\w+", text)
+    if not tokens:
+        return None
+    return " OR ".join(f'"{t}"' for t in tokens)
+
+
+def search_path_projection(
+    conn: sqlite3.Connection, query: str, *, limit: int = 25
+) -> list[FileRecord]:
+    """Path search via the indexed ``path_fts`` table (blueprint section
+    11), falling back to ``search_by_substring``'s ``LIKE`` scan when FTS
+    finds nothing -- either because the query doesn't tokenize to
+    anything (rare) or because it's a mid-word fragment FTS can't match.
+    """
+    fts_query = _path_fts_query(query)
+    if fts_query is not None:
+        rows = conn.execute(
+            """
+            SELECT f.* FROM path_fts
+            JOIN files f ON f.id = path_fts.file_id
+            WHERE path_fts MATCH ?
+            ORDER BY bm25(path_fts), f.path
+            LIMIT ?
+            """,
+            (fts_query, limit),
+        ).fetchall()
+        if rows:
+            return [_row_to_file(row) for row in rows]
+    return search_by_substring(conn, query, limit=limit)
 
 
 def insert(conn: sqlite3.Connection, file: FileRecord) -> None:
@@ -91,6 +124,10 @@ def insert(conn: sqlite3.Connection, file: FileRecord) -> None:
                 file.created_at,
                 file.updated_at,
             ),
+        )
+        conn.execute(
+            "INSERT INTO path_fts (file_id, path) VALUES (?, ?)",
+            (file.id, file.path),
         )
 
 
@@ -158,6 +195,7 @@ def delete(conn: sqlite3.Connection, file_id: str) -> None:
     """
     with transaction(conn):
         conn.execute("DELETE FROM index_jobs WHERE file_id = ?", (file_id,))
+        conn.execute("DELETE FROM path_fts WHERE file_id = ?", (file_id,))
         links_repo.delete_by_entity_file(conn, file_id)
         links_repo.delete_by_document_file(conn, file_id)
         conn.execute(

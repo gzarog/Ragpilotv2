@@ -91,6 +91,21 @@ def project_cache_dir(project_id: str, home: Path | None = None) -> Path:
     return project_dir(project_id, home) / "cache"
 
 
+def project_vector_index_path(project_id: str, home: Path | None = None) -> Path:
+    """Where a project's persistent ANN index lives (blueprint section
+    3), alongside its ``knowledge.db`` -- see ``retrieval/ann.py``.
+    """
+    return project_dir(project_id, home) / "vectors.usearch"
+
+
+def project_vector_meta_path(project_id: str, home: Path | None = None) -> Path:
+    """Format/model/generation metadata for ``project_vector_index_path``
+    (blueprint section 48) -- what tells a loader the on-disk index is
+    stale and must be rebuilt rather than silently used.
+    """
+    return project_dir(project_id, home) / "vectors.meta.json"
+
+
 def project_state_dir(project_id: str, home: Path | None = None) -> Path:
     return project_dir(project_id, home) / "state"
 

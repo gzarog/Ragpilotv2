@@ -352,3 +352,106 @@ KNOWLEDGE_DB_V6: tuple[str, ...] = (
     )
     """,
 )
+
+# Search performance redesign, phase 1 (blueprint sections 7/10): an
+# indexed ``alias`` column so ``retrieval/lexical.py``'s "Class.member"
+# alias lookup (see ``entities_repo.compute_alias``) is a ``WHERE alias =
+# ?`` index seek instead of a full-corpus Python scan over every entity,
+# plus a case-insensitive index backing exact document-title lookup the
+# same way. Both are additive; ``schema_migrations`` records this
+# migration as ``5, 6`` are already recorded, so it only ever runs once
+# per database, and any entity row inserted before this migration simply
+# has ``alias IS NULL`` until its file is next reindexed (``entities_repo.
+# insert`` populates it going forward) -- a stale-until-reindexed gap
+# already accepted by this project's own generational delete-then-insert
+# model, not a new one.
+KNOWLEDGE_DB_V7: tuple[str, ...] = (
+    "ALTER TABLE entities ADD COLUMN alias TEXT",
+    # Backfills every already-indexed entity's alias in one statement
+    # (rather than leaving it ``NULL`` until its file is next reindexed):
+    # a recursive CTE splits ``qualified_name`` on '.', then joins its
+    # last two segments -- the exact rule ``entities_repo.compute_alias``
+    # applies to every entity inserted from here on. Uses two correlated
+    # scalar subqueries (picking segment ``n = total-1`` and ``n = total``
+    # by position) rather than ``group_concat`` over an ``ORDER BY``
+    # subquery: SQLite does not guarantee ``group_concat`` consumes rows
+    # in a subquery's ordered sequence without an enclosing ``GROUP BY``,
+    # which silently produced the two segments in the wrong order when
+    # tried.
+    """
+    UPDATE entities
+    SET alias = (
+        WITH RECURSIVE segs(rest, seg, n) AS (
+            SELECT qualified_name || '.', '', 0
+            UNION ALL
+            SELECT substr(rest, instr(rest, '.') + 1),
+                   substr(rest, 1, instr(rest, '.') - 1),
+                   n + 1
+            FROM segs
+            WHERE rest <> ''
+        ),
+        total(n) AS (SELECT MAX(n) FROM segs)
+        SELECT (SELECT seg FROM segs WHERE n = total.n - 1)
+               || '.' || (SELECT seg FROM segs WHERE n = total.n)
+        FROM total
+        WHERE total.n >= 3
+    )
+    WHERE alias IS NULL
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_entities_alias ON entities(alias)",
+    "CREATE INDEX IF NOT EXISTS idx_documents_title_nocase ON documents(title COLLATE NOCASE)",
+)
+
+# Search performance redesign, phase 2 (blueprint section 11): a
+# dedicated FTS5 index over file paths so ``ragpilot search``'s path
+# matching is an indexed lookup instead of ``files_repo.
+# search_by_substring``'s ``LIKE '%query%'`` sequential scan. Populated
+# alongside ``files`` writes (``files_repo.insert``/``delete``). No
+# separate tokenized column: FTS5's default ``unicode61`` tokenizer
+# already splits on ``/``, ``.``, and other non-alphanumeric characters
+# when it indexes ``path``, so "vectorstore" and "py" are already
+# independently searchable tokens of "src/ragpilot/retrieval/
+# vectorstore.py" without any pre-tokenization. Plain substring ``LIKE``
+# is kept as a fallback for fragments that don't align to a token
+# boundary (e.g. "ectorstore" mid-word) -- see
+# ``files_repo.search_path_projection``.
+KNOWLEDGE_DB_V8: tuple[str, ...] = (
+    """
+    CREATE VIRTUAL TABLE IF NOT EXISTS path_fts USING fts5(
+        file_id UNINDEXED,
+        path
+    )
+    """,
+    "INSERT INTO path_fts (file_id, path) SELECT id, path FROM files",
+)
+
+# Search performance redesign, phase 3 (blueprint section 13): the
+# integer-key <-> subject mapping a persistent ANN index needs, since
+# ``usearch``/``hnswlib`` keys are compact integers, not this project's
+# UUID-shaped ``entities.id``/``document_sections.id``. Additive and, like
+# ``embeddings`` (``KNOWLEDGE_DB_V5``), entirely disposable: dropping every
+# row here only costs a lazy ANN rebuild (``retrieval/ann.py``), never
+# touches ``entities``/``documents``. ``vector_id`` is
+# ``INTEGER PRIMARY KEY AUTOINCREMENT`` specifically so a deleted row's id
+# is never reused by a later insert -- an ANN index that still has a
+# stale entry under a reused id would silently resolve to the wrong
+# subject. ``file_id`` (present on ``embeddings`` for the same reason) is
+# what lets ``retrieval/ann.py`` delete a touched file's previous
+# generation of vector ids before re-adding its current ones, mirroring
+# ``embeddings_repo.delete_by_file``.
+KNOWLEDGE_DB_V9: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS vector_items (
+        vector_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        subject_type TEXT NOT NULL,
+        subject_id TEXT NOT NULL,
+        file_id TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        UNIQUE(subject_type, subject_id, model_id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_vector_items_subject ON vector_items(subject_type, subject_id)",
+    "CREATE INDEX IF NOT EXISTS idx_vector_items_model ON vector_items(model_id)",
+    "CREATE INDEX IF NOT EXISTS idx_vector_items_file ON vector_items(file_id)",
+)

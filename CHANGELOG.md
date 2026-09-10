@@ -820,3 +820,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `convert()` call against the same connection is proven to never touch
   the PDF-pipeline singleton again), and the existing page-provenance
   golden test's assertions hold unchanged through the Markdown round-trip.
+
+- Search Performance Redesign. Six phases replacing lexical full-corpus
+  Python scans and semantic search's brute-force scan of every current-
+  model embedding with indexed lookups and a persistent ANN index, while
+  keeping every existing command's output contract backward-compatible
+  (the full pre-existing test suite passes unmodified).
+  - **Lexical fixes** (`storage/schema.py`'s additive migrations 7/8,
+    `entities_repo.py`/`documents_repo.py`/`files_repo.py`): an indexed
+    `entities.alias` column (`entities_repo.compute_alias`, backfilled
+    for already-indexed rows via a recursive-CTE `UPDATE`) replaces the
+    previous `list_all()` full-corpus alias scan; a
+    `documents(title COLLATE NOCASE)` index replaces the equivalent
+    full-corpus title scan; `retrieval/lexical.py`'s entity/document
+    search now runs a single `JOIN files`/`JOIN documents` projection
+    query per stage (new `EntitySearchRow`/`DocumentSearchRow`
+    dataclasses) instead of a separate `files_repo.get()` round trip per
+    hit. `retrieval/vectorstore.py`'s brute-force `top_k` now uses
+    `heapq.nsmallest` (O(N log K)) instead of a full sort (O(N log N)).
+  - **Path FTS** (migration 8): a `path_fts` FTS5 index over `files.path`
+    (`files_repo.search_path_projection`) replaces `search_by_substring`'s
+    `LIKE '%query%'` scan as the primary path-search path, falling back to
+    the original `LIKE` scan for fragments that don't align to a token
+    boundary.
+  - **Persistent ANN semantic index** (new `usearch` dependency,
+    `retrieval/ann.py`, `storage/repositories/vector_items_repo.py`,
+    migration 9's `vector_items` table): a `usearch`-backed HNSW index
+    (`AnnIndex` protocol, `USearchAnnIndex`) replaces the previous
+    brute-force cosine scan over every current-model embedding as
+    `retrieval/semantic.py`'s primary path, with a pure-Python
+    `BruteForceAnnIndex` (same protocol) as an automatic fallback when
+    `usearch` can't be loaded. `vector_items` maps compact integer vector
+    ids to their code entity/document section, populated alongside
+    `embeddings` during indexing (`indexing/embedding_indexer.py`); a
+    batched `vector_items_repo.batch_metadata_lookup` replaces a
+    per-search-hit metadata round trip. The index is synced
+    incrementally per touched file right after each indexing pass
+    (`indexing/runner.py`), auto-rebuilds once deleted vectors exceed
+    `search.vector.rebuild_deleted_ratio` (default 15%), and any project
+    with embeddings but no `vector_items` yet (pre-existing `knowledge.db`
+    files, or the on-disk index's `model_id`/`dim` no longer matching)
+    falls back to the original full-scan path unchanged, per source --
+    no forced re-index is required. Adds `ragpilot vectors rebuild` and
+    a `ragpilot doctor` "Semantic" section reporting the active backend
+    and vector/index-size counts.
+  - **Query routing** (`retrieval/query_classifier.py`): a deterministic
+    (no AI) `classify_query`/`estimate_confidence`, and a new
+    `search.lazy_semantic` config flag (default `false`, preserving
+    today's "always attach a semantic section when `search.semantic` is
+    on" contract) that skips semantic search entirely once the lexical
+    pass already found a high-confidence hit. `ragpilot search --explain`
+    surfaces the classified query kind, lexical confidence, and a
+    per-stage timing breakdown.
+  - **Hybrid reranking** (`retrieval/merger.py`, `retrieval/reranker.py`,
+    `ragpilot search --hybrid`): dedups lexical and semantic hits by
+    `(kind, id)` into one candidate set and reranks them into a single
+    ordered list -- primary lexical tier, then semantic score, then the
+    existing tie-breaker chain -- with a semantic-only hit always ranked
+    below every lexical tier so similarity can never silently upgrade an
+    exact match. Purely additive: the existing separate `results`/
+    `semantic` sections are unchanged unless `--hybrid` is passed.
+  - **Caching** (`retrieval/cache.py`, `search.cache.*` config): a
+    bounded LRU cache for search results and for computed query
+    embeddings, gated behind `search.cache.enabled` (default `true`).
+    Both are process-global, since a one-shot CLI invocation gets no
+    benefit from a cache it immediately discards -- the payoff is a
+    long-lived process serving repeated queries within itself, chiefly
+    `ragpilot serve`. Invalidation needs no explicit clear: every cache
+    key folds in each searched database's file identity and its SQLite
+    `PRAGMA data_version`, which changes whenever a different connection
+    (every reindex opens its own) commits to it.
+  - Not included in this pass: the blueprint's benchmark suite
+    (`benchmarks/search/` across synthetic 5k-1M-embedding corpora) and
+    golden-query quality regression tests (Recall@K/MRR/NDCG) are left
+    for a follow-up -- everything else in the blueprint's Definition of
+    Done is addressed above.
