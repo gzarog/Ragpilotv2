@@ -51,6 +51,11 @@ class ProcessorContext:
     source_id: str | None = None
     file_id: str | None = None
     source_root: Path | None = None
+    # ``config.documents.max_pages`` -- Phase 3's DocumentProcessor checks
+    # this itself (cheaply, before any heavy conversion) rather than the
+    # coordinator pre-filtering by page count, since page count is not
+    # knowable until a processor has looked at the file.
+    max_document_pages: int | None = None
     # The generation this run's derived rows should be tagged with --
     # always files.generation + 1, matching the bump files_repo.mark_indexed
     # applies right after a processor returns successfully. Writing this
@@ -219,6 +224,7 @@ class IndexCoordinator:
                 file_id=file.id,
                 source_root=self._root,
                 next_generation=file.generation + 1,
+                max_document_pages=self._config.documents.max_pages,
             )
             started = time.monotonic()
             try:

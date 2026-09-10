@@ -161,3 +161,73 @@ KNOWLEDGE_DB_V2: tuple[str, ...] = (
     )
     """,
 )
+
+# Phase 3: Docling-derived document structure (headings/paragraphs/tables)
+# plus an FTS5 index over their text, mirroring KNOWLEDGE_DB_V2's
+# entities/relationships/code_fts shape. Additive-only migration layered on
+# top of KNOWLEDGE_DB_V2 -- see storage/migrations.
+KNOWLEDGE_DB_V3: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS documents (
+        id TEXT PRIMARY KEY,
+        source_id TEXT NOT NULL,
+        file_id TEXT NOT NULL REFERENCES files(id),
+        format TEXT NOT NULL,
+        title TEXT,
+        author TEXT,
+        page_count INTEGER,
+        section_count INTEGER NOT NULL DEFAULT 0,
+        paragraph_count INTEGER NOT NULL DEFAULT 0,
+        table_count INTEGER NOT NULL DEFAULT 0,
+        is_scanned INTEGER NOT NULL DEFAULT 0,
+        content_hash TEXT,
+        generation INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(file_id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_documents_source ON documents(source_id)",
+    # One table for all three unit kinds (heading/paragraph/table), a
+    # ``kind`` discriminator, mirroring how KNOWLEDGE_DB_V2 keeps every
+    # code entity kind in one ``entities`` table rather than one table per
+    # ``EntityType``. ``table_rows`` is a JSON row-major grid, populated
+    # only for kind='table'.
+    """
+    CREATE TABLE IF NOT EXISTS document_sections (
+        id TEXT PRIMARY KEY,
+        document_id TEXT NOT NULL REFERENCES documents(id),
+        file_id TEXT NOT NULL REFERENCES files(id),
+        kind TEXT NOT NULL,
+        heading_level INTEGER,
+        text TEXT NOT NULL DEFAULT '',
+        heading_path TEXT NOT NULL DEFAULT '[]',
+        parent_id TEXT REFERENCES document_sections(id),
+        order_index INTEGER NOT NULL,
+        page_start INTEGER,
+        page_end INTEGER,
+        table_rows TEXT,
+        num_rows INTEGER,
+        num_cols INTEGER,
+        generation INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_document_sections_document "
+    "ON document_sections(document_id, order_index)",
+    "CREATE INDEX IF NOT EXISTS idx_document_sections_file ON document_sections(file_id)",
+    "CREATE INDEX IF NOT EXISTS idx_document_sections_parent ON document_sections(parent_id)",
+    # Not an external-content FTS table, for the same reason as code_fts:
+    # rows are written explicitly alongside document_sections (not via SQL
+    # triggers) so the atomic "delete previous generation, insert new"
+    # rule stays one auditable code path (see documents/pipeline.py).
+    """
+    CREATE VIRTUAL TABLE IF NOT EXISTS document_fts USING fts5(
+        section_id UNINDEXED,
+        document_id UNINDEXED,
+        heading_text,
+        body,
+        doc_title
+    )
+    """,
+)

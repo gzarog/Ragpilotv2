@@ -198,3 +198,122 @@ class Relationship(BaseModel):
     evidence: str | None = None
     generation: int
     created_at: str
+
+
+class DocumentFormat(StrEnum):
+    """Phase 3's supported document formats. Deliberately narrower than
+    ``sources.detector.DOCUMENT_EXTENSIONS`` -- legacy binary Office
+    formats, OpenDocument, RTF, CSV and reStructuredText are classified as
+    ``FileKind.DOCUMENT`` for routing but are not converted yet (see
+    ``documents/docling_adapter.py``'s ``UnsupportedDocumentFormatError``).
+    """
+
+    PDF = "pdf"
+    DOCX = "docx"
+    PPTX = "pptx"
+    XLSX = "xlsx"
+    HTML = "html"
+    MARKDOWN = "markdown"
+    TXT = "txt"
+    EML = "eml"
+
+
+class SectionKind(StrEnum):
+    """Discriminator for a row in ``document_sections``: a heading node in
+    the document's outline, a paragraph-level text chunk, or a table.
+    """
+
+    HEADING = "heading"
+    PARAGRAPH = "paragraph"
+    TABLE = "table"
+
+
+class Document(BaseModel):
+    """One row per successfully converted document file, mirroring how
+    ``FileRecord`` anchors a code file -- ``Entity``/``Section`` rows are
+    this document's children the same way code entities are a file's.
+    """
+
+    id: str
+    source_id: str
+    file_id: str
+    format: DocumentFormat
+    title: str | None = None
+    author: str | None = None
+    page_count: int | None = None
+    section_count: int = 0
+    paragraph_count: int = 0
+    table_count: int = 0
+    is_scanned: bool = False
+    content_hash: str | None = None
+    generation: int
+    created_at: str
+    updated_at: str
+
+
+class Section(BaseModel):
+    """A heading node in a document's outline (``kind == HEADING``).
+
+    ``heading_path`` is the titles of this heading's ancestors, root
+    first, not including this heading's own title -- kept redundantly on
+    every row (rather than requiring a walk up ``parent_id``) so a single
+    row carries its own provenance for display without extra queries,
+    matching the blueprint's "never return knowledge without traceable
+    evidence" rule.
+    """
+
+    id: str
+    document_id: str
+    file_id: str
+    kind: SectionKind = SectionKind.HEADING
+    heading_level: int
+    text: str
+    heading_path: list[str] = []
+    parent_id: str | None = None
+    order_index: int
+    page_start: int | None = None
+    page_end: int | None = None
+    generation: int
+    created_at: str
+
+
+class Paragraph(BaseModel):
+    """A paragraph-level (or size-bounded, chunked) body text unit
+    (``kind == PARAGRAPH``), stored in the same ``document_sections``
+    table as ``Section``/``Table`` rows -- see ``storage/schema.py``.
+    """
+
+    id: str
+    document_id: str
+    file_id: str
+    kind: SectionKind = SectionKind.PARAGRAPH
+    text: str
+    heading_path: list[str] = []
+    parent_id: str | None = None
+    order_index: int
+    page_start: int | None = None
+    page_end: int | None = None
+    generation: int
+    created_at: str
+
+
+class Table(BaseModel):
+    """A table (``kind == TABLE``), its cells stored as a row-major grid
+    of strings rather than individual cell rows -- there is no query need
+    yet for addressing a single cell, and this keeps one table one row.
+    """
+
+    id: str
+    document_id: str
+    file_id: str
+    kind: SectionKind = SectionKind.TABLE
+    heading_path: list[str] = []
+    parent_id: str | None = None
+    rows: list[list[str]]
+    num_rows: int
+    num_cols: int
+    order_index: int
+    page_start: int | None = None
+    page_end: int | None = None
+    generation: int
+    created_at: str

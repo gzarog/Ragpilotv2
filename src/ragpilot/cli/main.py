@@ -8,6 +8,7 @@ from ragpilot.cli import (
     callees,
     callers,
     config_cmd,
+    docs,
     doctor,
     index,
     init,
@@ -38,6 +39,7 @@ app.command("symbol", help="Look up a code symbol by name.")(symbol.symbol)
 app.command("callers", help="Show entities that call the given symbol.")(callers.callers)
 app.command("callees", help="Show entities the given symbol calls.")(callees.callees)
 app.command("references", help="Show all edges touching the given symbol.")(references.references)
+app.command("docs", help="List indexed documents.")(docs.docs)
 
 
 if __name__ == "__main__":
