@@ -34,8 +34,12 @@ app = typer.Typer(no_args_is_help=True, help="Manage the RAGpilot background dae
 # AppContext, apply migrations and subscribe its first watchers before
 # its health snapshot exists -- generous but bounded so a genuinely
 # broken start (bad config, crash-on-import) fails `daemon start` instead
-# of hanging.
-_START_TIMEOUT_SECONDS = 10.0
+# of hanging. The import chain alone (docling -> transformers -> torch)
+# can take several seconds on a slow/loaded machine (observed timing out
+# at 10s on Windows CI, where process startup and cold imports are
+# consistently slower than Linux/macOS in this project's own CI history)
+# well before the daemon does any real work.
+_START_TIMEOUT_SECONDS = 30.0
 _STOP_TIMEOUT_SECONDS = 15.0
 _POLL_INTERVAL_SECONDS = 0.1
 
