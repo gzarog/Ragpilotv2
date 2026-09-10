@@ -42,6 +42,29 @@ download path, so those tests run in the default suite like everything
 else. CI runs `docling_pdf` tests too, but in a separate,
 non-blocking (`continue-on-error`) job -- see `.github/workflows/ci.yml`.
 
+#### What `docling_pdf` actually proves for PDF
+
+PDF is not normalized straight off Docling's PDF pipeline output. After
+that real pipeline produces its `DoclingDocument`, `docling_adapter
+.convert` exports it to Markdown, caches the Markdown text by the file's
+content hash (`document_conversion_cache`, a project's `knowledge.db`),
+and reparses that Markdown through Docling's separate, rule-based
+Markdown backend into the document that is actually normalized/chunked/
+indexed -- see `docling_adapter.py`'s module docstring for the full
+rationale. `pytest -m docling_pdf` is what actually exercises this: it
+proves the real pipeline's Markdown export round-trips correctly through
+a reparse (`test_pdf_converts_to_a_paragraph_with_page_provenance`), that
+a first `convert()` call against a project connection populates the
+cache, and that a second `convert()` call against that same connection
+reuses the cached Markdown without ever touching the PDF-pipeline
+singleton again (`test_convert_caches_markdown_by_content_hash`/
+`test_convert_reuses_cached_markdown_without_reconverting`). The marker-
+based page-number reconstruction this round-trip requires (reparsed
+items carry no `prov`) is proven separately, without any real PDF or
+model, in `tests/unit/test_document_normalizer.py`'s
+`test_page_break_marker_reconstructs_page_numbers_without_prov` -- that
+one runs in the default suite.
+
 ### The `daemon_subprocess` marker
 
 `ragpilot daemon start`/`stop` spawn and signal a real, detached OS

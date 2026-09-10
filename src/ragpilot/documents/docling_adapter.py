@@ -7,19 +7,43 @@ other format handled here (DOCX, PPTX, XLSX, HTML, Markdown, TXT, EML) is
 converted by Docling's rule-based backends and never touches that download
 path, so only PDF conversion needs to be gated behind that marker in
 tests.
+
+PDF gets one extra step the other formats don't: rather than normalizing
+Docling's PDF-layout ``DoclingDocument`` directly, ``convert()`` exports it
+to Markdown text, caches that text (keyed by content hash, in
+``document_conversion_cache`` -- see ``storage/schema.py``'s
+``KNOWLEDGE_DB_V6``), and reparses the Markdown through Docling's own
+Markdown backend into a *second* ``DoclingDocument`` -- and it is that
+reparsed document callers actually normalize/chunk/index. This means the
+PDF layout/table-structure model only ever runs once per distinct PDF
+content, no matter how many times the file is re-indexed: a cache hit
+reparses cached Markdown without touching the model at all. The reparsed
+document carries no page provenance of its own (a plain Markdown-backend
+parse attaches no ``prov`` to anything, and its ``num_pages()`` is always
+0), so ``convert()`` returns the real page count and a page-break marker
+string alongside it -- see ``ConversionResult`` -- for
+``normalizer.normalize`` to reconstruct page numbers from.
 """
 
 from __future__ import annotations
 
+import sqlite3
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 
 from docling.datamodel.base_models import ConversionStatus, InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling_core.types.doc.document import DoclingDocument
+from docling_core.types.io import DocumentStream
 
 from ragpilot.core.errors import RagpilotError
 from ragpilot.core.models import DocumentFormat
+from ragpilot.sources.fingerprint import hash_file
+from ragpilot.storage.repositories import document_conversion_cache_repo
+from ragpilot.storage.sqlite import transaction
 
 # Phase 3's supported extensions. Anything else that ``sources.detector``
 # still classifies as ``FileKind.DOCUMENT`` (legacy .doc/.ppt/.xls,
@@ -53,6 +77,20 @@ _FORMAT_TO_INPUT_FORMAT: dict[DocumentFormat, InputFormat] = {
 }
 
 _SUCCESS_STATUSES = (ConversionStatus.SUCCESS, ConversionStatus.PARTIAL_SUCCESS)
+
+# Plain text, no Markdown/HTML special syntax: an HTML-comment-style
+# placeholder (e.g. "<!--PAGEBREAK-->") is silently swallowed by Docling's
+# Markdown parser and produces no item at all when reparsed, so it cannot
+# be recovered by ``normalizer.normalize``. Wrapped in U+2063 INVISIBLE
+# SEPARATOR on both sides to minimize accidental collision with real
+# document text while still round-tripping as an exact, distinct
+# ``TextItem.text`` value through the reparse.
+PAGE_BREAK_MARKER = "⁣RAGPILOT-PAGE-BREAK⁣"
+
+# Bump if PAGE_BREAK_MARKER or export_to_markdown's options ever change --
+# see document_conversion_cache_repo.get's cache_version handling for why
+# a stale-version cache row must be treated as a miss rather than reused.
+_CACHE_VERSION = 1
 
 
 class UnsupportedDocumentFormatError(RagpilotError):
@@ -122,13 +160,37 @@ def pdf_page_count(path: Path) -> int:
         handle.close()
 
 
-def convert(path: Path) -> DoclingDocument:
-    """Converts ``path`` (already confirmed supported by ``detect_format``)
-    to a Docling ``DoclingDocument``, or raises ``DocumentConversionError``.
+@dataclass(frozen=True)
+class ConversionResult:
+    """``convert()``'s return type.
+
+    For every non-PDF format, ``page_count``/``page_break_marker`` are
+    both ``None`` -- callers fall back to ``document``'s own
+    ``num_pages()``/``item.prov``, exactly as before this type existed.
+
+    For PDF, ``document`` is the *reparsed-from-Markdown* document, not
+    Docling's PDF-layout document -- it carries no ``prov`` on any item
+    and its own ``num_pages()`` is always 0, so ``page_count`` carries the
+    real PDF page count (via ``pdf_page_count``) instead, and
+    ``page_break_marker`` is ``PAGE_BREAK_MARKER``: the literal text
+    callers must special-case when walking ``document``'s items to
+    reconstruct page numbers (see ``normalizer.normalize``).
     """
-    converter = _get_converter()
+
+    document: DoclingDocument
+    page_count: int | None = None
+    page_break_marker: str | None = None
+
+
+def _run_conversion(
+    converter: DocumentConverter, path: Path, source: str | DocumentStream
+) -> DoclingDocument:
+    """Runs ``converter`` and returns its resulting document, or raises
+    ``DocumentConversionError`` -- shared by both the PDF and non-PDF
+    conversion paths below, and by the Markdown reparse.
+    """
     try:
-        result = converter.convert(str(path))
+        result = converter.convert(source)
     except Exception as exc:  # noqa: BLE001 - Docling's own exception types vary by backend
         raise DocumentConversionError(
             f"{path}: Docling failed to convert this file: {exc}"
@@ -138,3 +200,85 @@ def convert(path: Path) -> DoclingDocument:
             f"{path}: Docling conversion did not succeed (status={result.status})"
         )
     return result.document
+
+
+_md_converter: DocumentConverter | None = None
+
+
+def _get_md_converter() -> DocumentConverter:
+    """Separate singleton from ``_get_converter()``'s PDF-pipeline-
+    configured one: this one never touches PDF layout/table-structure
+    models at all, it is Docling's plain, rule-based Markdown backend --
+    the same one used for real ``.md`` files, just fed cached or
+    freshly-exported PDF Markdown instead of a file on disk.
+    """
+    global _md_converter
+    if _md_converter is None:
+        _md_converter = DocumentConverter(allowed_formats=[InputFormat.MD])
+    return _md_converter
+
+
+def _reparse_markdown(path: Path, markdown_text: str) -> DoclingDocument:
+    """Reparses ``markdown_text`` (Docling's own Markdown export of a PDF)
+    back into a ``DoclingDocument`` via Docling's Markdown backend, in
+    memory -- no temp file on disk. The stream must be named with an
+    MD-recognized extension: Docling sniffs format from the name even
+    when ``allowed_formats`` only contains one entry, so the resulting
+    document's ``origin.filename`` ends up being this synthetic
+    ``"<stem>.md"`` name rather than the real PDF's -- harmless, since
+    ``metadata.extract_metadata``'s ``source_filename`` field is computed
+    but never consumed anywhere else in this codebase.
+    """
+    stream = DocumentStream(name=f"{path.stem}.md", stream=BytesIO(markdown_text.encode("utf-8")))
+    return _run_conversion(_get_md_converter(), path, stream)
+
+
+def _convert_pdf(path: Path, conn: sqlite3.Connection | None) -> ConversionResult:
+    """PDF's extra step: export Docling's real PDF-layout conversion to
+    Markdown (cached by content hash so an unchanged PDF never re-runs
+    the model), then reparse that Markdown into the document that
+    actually gets normalized/chunked/indexed. See this module's
+    docstring for the full rationale.
+    """
+    real_page_count = pdf_page_count(path)
+    content_hash = hash_file(path)
+    cached = (
+        document_conversion_cache_repo.get(conn, content_hash, cache_version=_CACHE_VERSION)
+        if conn is not None
+        else None
+    )
+    if cached is not None:
+        markdown = cached.markdown
+    else:
+        document = _run_conversion(_get_converter(), path, str(path))
+        markdown = document.export_to_markdown(page_break_placeholder=PAGE_BREAK_MARKER)
+        if conn is not None:
+            with transaction(conn):
+                document_conversion_cache_repo.put(
+                    conn,
+                    document_conversion_cache_repo.CachedConversion(
+                        content_hash=content_hash, markdown=markdown, page_count=real_page_count
+                    ),
+                    cache_version=_CACHE_VERSION,
+                    created_at=datetime.now(UTC).isoformat(),
+                )
+    reparsed = _reparse_markdown(path, markdown)
+    return ConversionResult(
+        document=reparsed, page_count=real_page_count, page_break_marker=PAGE_BREAK_MARKER
+    )
+
+
+def convert(path: Path, *, conn: sqlite3.Connection | None = None) -> ConversionResult:
+    """Converts ``path`` (already confirmed supported by ``detect_format``)
+    to a Docling ``DoclingDocument``, wrapped in a ``ConversionResult``, or
+    raises ``DocumentConversionError``.
+
+    ``conn``, when given, is the caller's already-open per-project
+    ``knowledge.db`` connection -- used only for PDF's Markdown-export
+    cache (``document_conversion_cache``). Every other format ignores it
+    entirely and converts exactly as it always has.
+    """
+    if detect_format(path) is DocumentFormat.PDF:
+        return _convert_pdf(path, conn)
+    document = _run_conversion(_get_converter(), path, str(path))
+    return ConversionResult(document=document)
