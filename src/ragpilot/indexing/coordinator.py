@@ -13,7 +13,7 @@ import sqlite3
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -109,6 +109,15 @@ class IndexRunResult:
     indexed: int = 0
     skipped_limit: int = 0
     failed: int = 0
+    # File ids this run actually (re)indexed with derived content, split
+    # by kind -- Phase 4's cross-domain linking pass (cli/index.py) is
+    # scoped to these rather than the whole project, so an index run's
+    # cost stays proportional to what changed. A file kept UNCHANGED
+    # never reaches _process_queue at all, and one that was only
+    # SKIPPED_LIMIT produced no entities/document content to link, so
+    # neither is included here.
+    touched_code_file_ids: list[str] = field(default_factory=list)
+    touched_document_file_ids: list[str] = field(default_factory=list)
 
 
 class IndexCoordinator:
@@ -289,6 +298,10 @@ class IndexCoordinator:
                     result.skipped_limit += 1
                 else:
                     result.indexed += 1
+                    if file.kind is FileKind.CODE:
+                        result.touched_code_file_ids.append(file.id)
+                    elif file.kind is FileKind.DOCUMENT:
+                        result.touched_document_file_ids.append(file.id)
                 log_event(
                     _logger,
                     "file_indexed",

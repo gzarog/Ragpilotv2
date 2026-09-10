@@ -16,8 +16,10 @@ from ragpilot.core.lifecycle import AppContext
 from ragpilot.core.models import FileKind
 from ragpilot.documents.pipeline import document_processor
 from ragpilot.indexing.coordinator import IndexCoordinator, ProcessorRegistry, default_registry
+from ragpilot.knowledge.linker import link_touched_files
 from ragpilot.sources.registry import SourceRegistry
 from ragpilot.storage.repositories import sources_repo
+from ragpilot.storage.sqlite import transaction
 
 from ._common import cli_command, console
 
@@ -68,6 +70,24 @@ def index(
                 )
                 result = coordinator.run()
                 total_failed += result.failed
+
+                # Phase 4's cross-domain linking pass: deliberately run
+                # here, after the per-file processor queue has fully
+                # drained, rather than inside IndexCoordinator itself --
+                # a link needs both a code entity and a document to
+                # exist, so it cannot be computed per-file the way
+                # Phase 2/3's atomic generational writes are, and
+                # IndexCoordinator stays kind-agnostic (it does not import
+                # anything from code/ or documents/ directly).
+                linked = 0
+                if result.touched_code_file_ids or result.touched_document_file_ids:
+                    with transaction(conn):
+                        linked = link_touched_files(
+                            conn,
+                            touched_code_file_ids=result.touched_code_file_ids,
+                            touched_document_file_ids=result.touched_document_file_ids,
+                        )
+
                 now = datetime.now(UTC).isoformat()
                 sources_repo.update_scan_result(
                     ctx.sources_conn,
@@ -81,7 +101,7 @@ def index(
                     f"scanned={result.scanned} new={result.new} changed={result.changed} "
                     f"unchanged={result.unchanged} deleted={result.deleted} "
                     f"indexed={result.indexed} skipped={result.skipped_limit} "
-                    f"failed={result.failed}"
+                    f"failed={result.failed} linked={linked}"
                 )
 
             if total_failed:

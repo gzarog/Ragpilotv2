@@ -11,8 +11,30 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass, field
 
 from ragpilot.core.models import Document, DocumentFormat, Paragraph, Section, SectionKind, Table
+from ragpilot.storage.repositories import links_repo
+
+
+@dataclass(frozen=True)
+class DocumentUnit:
+    """One ``document_sections`` row, kind-agnostic -- the shape
+    ``knowledge/linker.py`` and ``knowledge/evidence.py`` actually need
+    (heading/paragraph text, or a table's cells flattened into ``text``
+    so a linker match doesn't have to special-case table rows). Not a
+    replacement for ``Section``/``Paragraph``/``Table``: those stay the
+    Phase 3 storage-facing shapes; this is a read-facing projection.
+    """
+
+    id: str
+    document_id: str
+    file_id: str
+    kind: SectionKind
+    text: str
+    heading_path: list[str] = field(default_factory=list)
+    page_start: int | None = None
+    page_end: int | None = None
 
 
 def _row_to_document(row: sqlite3.Row) -> Document:
@@ -44,6 +66,7 @@ def delete_by_file(conn: sqlite3.Connection, file_id: str) -> None:
     reader never observes a document with zero or partial content
     mid-reindex.
     """
+    links_repo.delete_by_document_file(conn, file_id)
     conn.execute(
         "DELETE FROM document_fts WHERE section_id IN "
         "(SELECT id FROM document_sections WHERE file_id = ?)",
@@ -213,6 +236,47 @@ def insert_table(conn: sqlite3.Connection, table: Table, *, doc_title: str) -> N
         fts_body=flattened,
         doc_title=doc_title,
     )
+
+
+def _row_to_unit(row: sqlite3.Row) -> DocumentUnit:
+    text = row["text"] or ""
+    if row["kind"] == SectionKind.TABLE.value and row["table_rows"]:
+        cells = json.loads(row["table_rows"])
+        text = " ".join(cell for r in cells for cell in r if cell)
+    return DocumentUnit(
+        id=row["id"],
+        document_id=row["document_id"],
+        file_id=row["file_id"],
+        kind=SectionKind(row["kind"]),
+        text=text,
+        heading_path=json.loads(row["heading_path"]) if row["heading_path"] else [],
+        page_start=row["page_start"],
+        page_end=row["page_end"],
+    )
+
+
+def get_unit(conn: sqlite3.Connection, unit_id: str) -> DocumentUnit | None:
+    row = conn.execute("SELECT * FROM document_sections WHERE id = ?", (unit_id,)).fetchone()
+    return _row_to_unit(row) if row is not None else None
+
+
+def list_units_by_file(conn: sqlite3.Connection, file_id: str) -> list[DocumentUnit]:
+    rows = conn.execute(
+        "SELECT * FROM document_sections WHERE file_id = ? ORDER BY order_index", (file_id,)
+    ).fetchall()
+    return [_row_to_unit(row) for row in rows]
+
+
+def list_all_units(conn: sqlite3.Connection) -> list[DocumentUnit]:
+    """Every heading/paragraph/table unit in this project's
+    ``knowledge.db`` -- the "full existing corpus" side of
+    ``knowledge/linker.py``'s cross-domain match, same rationale as
+    ``entities_repo.list_all``.
+    """
+    rows = conn.execute(
+        "SELECT * FROM document_sections ORDER BY document_id, order_index"
+    ).fetchall()
+    return [_row_to_unit(row) for row in rows]
 
 
 def get_document(conn: sqlite3.Connection, document_id: str) -> Document | None:

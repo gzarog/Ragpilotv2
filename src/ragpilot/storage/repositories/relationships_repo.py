@@ -103,6 +103,21 @@ def incoming(
     return [_row_to_relationship(row) for row in rows]
 
 
+def find_by_target_symbol_prefix(conn: sqlite3.Connection, prefix: str) -> list[Relationship]:
+    """Relationships whose ``target_symbol`` starts with ``prefix``.
+
+    Used by ``knowledge/linker.py`` to fetch every ``framework_rules``-
+    tagged HTTP route finding (``target_symbol`` = "http_endpoint:METHOD:
+    /path") across the whole project in one query, rather than walking
+    every entity's outgoing edges to find them.
+    """
+    rows = conn.execute(
+        "SELECT * FROM relationships WHERE target_symbol LIKE ? ORDER BY id",
+        (prefix + "%",),
+    ).fetchall()
+    return [_row_to_relationship(row) for row in rows]
+
+
 def incoming_by_symbol(
     conn: sqlite3.Connection,
     symbol_name: str,

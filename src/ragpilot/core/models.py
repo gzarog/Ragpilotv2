@@ -147,6 +147,15 @@ class RelationshipType(StrEnum):
     REFERENCES = "references"
     CONTAINS = "contains"
     DEFINED_IN = "defined_in"
+    # Phase 4 cross-domain types (code entity <-> document/section). Only
+    # these three of the blueprint's catalog are populated -- PRODUCES/
+    # CONSUMES/DEPENDS_ON/REQUIRES/TESTED_BY/AFFECTS/SUPERSEDES have no
+    # real signal in what Phases 1-3 extract, so they are left out rather
+    # than added unused. See knowledge/linker.py for which resolver
+    # assigns which of these.
+    DOCUMENTED_BY = "documented_by"
+    MENTIONED_IN = "mentioned_in"
+    RELATED_TO = "related_to"
 
 
 class Confidence(StrEnum):
@@ -197,6 +206,30 @@ class Relationship(BaseModel):
     source_location: str | None = None
     evidence: str | None = None
     generation: int
+    created_at: str
+
+
+class CrossLink(BaseModel):
+    """A Phase 4 cross-domain fact linking one code ``Entity`` to one
+    ``Document`` (optionally pinned to a specific ``Section``/
+    ``Paragraph``/``Table`` row within it).
+
+    Kept as a table distinct from ``relationships`` rather than reusing it
+    directly: ``relationships.source_entity_id``/``target_entity_id`` are
+    both ``FOREIGN KEY REFERENCES entities(id)``, and a document is not an
+    entity row, so writing a document id into ``target_entity_id`` would
+    violate that constraint under ``PRAGMA foreign_keys = ON`` rather than
+    generalize cleanly -- see storage/schema.py's ``KNOWLEDGE_DB_V4``.
+    """
+
+    id: str
+    link_type: RelationshipType
+    entity_id: str
+    document_id: str
+    section_id: str | None = None
+    resolver: str
+    confidence: Confidence
+    evidence: str | None = None
     created_at: str
 
 

@@ -231,3 +231,29 @@ KNOWLEDGE_DB_V3: tuple[str, ...] = (
     )
     """,
 )
+
+# Phase 4: cross-domain (code entity <-> document) links, plus explicit
+# user-defined mappings. A parallel table rather than a reuse of
+# KNOWLEDGE_DB_V2's ``relationships`` -- see ``core.models.CrossLink``'s
+# docstring for why ``relationships``' entity-only foreign keys don't
+# generalize to a document target. Additive-only migration layered on top
+# of KNOWLEDGE_DB_V3 -- see storage/migrations.
+KNOWLEDGE_DB_V4: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS cross_links (
+        id TEXT PRIMARY KEY,
+        link_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL REFERENCES entities(id),
+        document_id TEXT NOT NULL REFERENCES documents(id),
+        section_id TEXT REFERENCES document_sections(id),
+        resolver TEXT NOT NULL,
+        confidence TEXT NOT NULL,
+        evidence TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE(entity_id, document_id, section_id, resolver)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_cross_links_entity ON cross_links(entity_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cross_links_document ON cross_links(document_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cross_links_section ON cross_links(section_id)",
+)
