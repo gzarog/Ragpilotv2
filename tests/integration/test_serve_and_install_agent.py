@@ -89,4 +89,8 @@ def test_install_agent_write_writes_exactly_that_content_and_nothing_else(
 def test_serve_help_documents_the_mcp_flag(ragpilot_home: Path, runner: CliRunner) -> None:
     result = runner.invoke(app, ["serve", "--help"])
     assert result.exit_code == 0
-    assert "--mcp" in result.output
+    # Rich soft-wraps option flags across lines in a narrow captured
+    # console (width varies by environment/terminal), so compare after
+    # collapsing hard line breaks -- see the same treatment above.
+    unwrapped = result.output.replace("\n", "")
+    assert "--mcp" in unwrapped
