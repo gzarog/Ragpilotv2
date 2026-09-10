@@ -42,6 +42,24 @@ class ProcessorContext:
     size: int
     kind: FileKind
     max_size_bytes: int
+    # Populated so a processor that derives entities (Phase 2's
+    # CodeProcessor) can write them atomically alongside this run's file
+    # record, without the coordinator's claim/retry/backoff loop above
+    # needing to know anything about entities/relationships. Phase 1's
+    # raw_processor ignores all four.
+    conn: sqlite3.Connection | None = None
+    source_id: str | None = None
+    file_id: str | None = None
+    source_root: Path | None = None
+    # The generation this run's derived rows should be tagged with --
+    # always files.generation + 1, matching the bump files_repo.mark_indexed
+    # applies right after a processor returns successfully. Writing this
+    # tag in the same delete+insert transaction as the entities/relationships
+    # (see code/processor.py) is what makes that half of the work atomic;
+    # the tiny files.generation bump immediately after is a separate,
+    # near-instantaneous transaction that cannot itself leave entities
+    # half-written since it touches no entity/relationship row.
+    next_generation: int = 0
 
 
 @dataclass(frozen=True)
@@ -192,7 +210,15 @@ class IndexCoordinator:
             files_repo.update_status(self._conn, file.id, FileStatus.PROCESSING, updated_at=_now())
             processor = self._processors.get(file.kind)
             ctx = ProcessorContext(
-                path=Path(file.path), size=file.size, kind=file.kind, max_size_bytes=max_size_bytes
+                path=Path(file.path),
+                size=file.size,
+                kind=file.kind,
+                max_size_bytes=max_size_bytes,
+                conn=self._conn,
+                source_id=self._source_id,
+                file_id=file.id,
+                source_root=self._root,
+                next_generation=file.generation + 1,
             )
             started = time.monotonic()
             try:

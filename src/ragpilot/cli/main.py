@@ -4,7 +4,19 @@ from __future__ import annotations
 
 import typer
 
-from ragpilot.cli import config_cmd, doctor, index, init, source, status, version_cmd
+from ragpilot.cli import (
+    callees,
+    callers,
+    config_cmd,
+    doctor,
+    index,
+    init,
+    references,
+    source,
+    status,
+    symbol,
+    version_cmd,
+)
 
 app = typer.Typer(
     name="ragpilot",
@@ -22,6 +34,10 @@ app.command("status", help="Show indexing status.")(status.status)
 app.command("doctor", help="Run health checks.")(doctor.doctor)
 app.command("health", help="Show a condensed health summary.")(doctor.health)
 app.command("version", help="Show the RAGpilot version.")(version_cmd.version)
+app.command("symbol", help="Look up a code symbol by name.")(symbol.symbol)
+app.command("callers", help="Show entities that call the given symbol.")(callers.callers)
+app.command("callees", help="Show entities the given symbol calls.")(callees.callees)
+app.command("references", help="Show all edges touching the given symbol.")(references.references)
 
 
 if __name__ == "__main__":

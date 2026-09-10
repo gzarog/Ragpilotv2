@@ -97,3 +97,67 @@ KNOWLEDGE_DB_V1: tuple[str, ...] = (
     )
     """,
 )
+
+# Phase 2: code entities/relationships extracted by Tree-sitter, plus an
+# FTS5 index over their names for lexical lookup. Additive-only migration
+# layered on top of KNOWLEDGE_DB_V1 -- see storage/migrations.
+KNOWLEDGE_DB_V2: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS entities (
+        id TEXT PRIMARY KEY,
+        source_id TEXT NOT NULL,
+        file_id TEXT NOT NULL REFERENCES files(id),
+        kind TEXT NOT NULL,
+        name TEXT NOT NULL,
+        qualified_name TEXT NOT NULL,
+        language TEXT NOT NULL,
+        parent_id TEXT REFERENCES entities(id),
+        signature TEXT,
+        start_line INTEGER NOT NULL,
+        end_line INTEGER NOT NULL,
+        start_col INTEGER NOT NULL DEFAULT 0,
+        end_col INTEGER NOT NULL DEFAULT 0,
+        generation INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(file_id, qualified_name, start_line)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_entities_file ON entities(file_id)",
+    "CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name)",
+    "CREATE INDEX IF NOT EXISTS idx_entities_qualified_name ON entities(qualified_name)",
+    "CREATE INDEX IF NOT EXISTS idx_entities_parent ON entities(parent_id)",
+    """
+    CREATE TABLE IF NOT EXISTS relationships (
+        id TEXT PRIMARY KEY,
+        relationship_type TEXT NOT NULL,
+        source_entity_id TEXT NOT NULL REFERENCES entities(id),
+        target_entity_id TEXT REFERENCES entities(id),
+        target_symbol TEXT,
+        resolver TEXT NOT NULL,
+        confidence TEXT NOT NULL,
+        file_id TEXT NOT NULL REFERENCES files(id),
+        source_location TEXT,
+        evidence TEXT,
+        generation INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_relationships_file ON relationships(file_id)",
+    "CREATE INDEX IF NOT EXISTS idx_relationships_source ON relationships(source_entity_id)",
+    "CREATE INDEX IF NOT EXISTS idx_relationships_target ON relationships(target_entity_id)",
+    "CREATE INDEX IF NOT EXISTS idx_relationships_target_symbol ON relationships(target_symbol)",
+    "CREATE INDEX IF NOT EXISTS idx_relationships_type ON relationships(relationship_type)",
+    # Not an external-content FTS table: rows are written explicitly by the
+    # code processor alongside entities (not via SQL triggers) so the
+    # "delete old generation, insert new, all in one transaction" atomicity
+    # rule in coordinator.py stays a single, auditable code path.
+    """
+    CREATE VIRTUAL TABLE IF NOT EXISTS code_fts USING fts5(
+        entity_id UNINDEXED,
+        name,
+        qualified_name,
+        snippet
+    )
+    """,
+)

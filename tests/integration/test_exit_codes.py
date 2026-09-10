@@ -48,11 +48,17 @@ def test_partial_indexing_failure_is_reported_and_does_not_crash(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Non-code extensions: cli/index.py routes FileKind.CODE through the
+    # real Tree-sitter CodeProcessor (Phase 2), so this generic "a poisoned
+    # processor must not crash the CLI" test uses document-kind files to
+    # keep exercising the default registry's raw_processor path it patches
+    # below. Phase 2's own code/parser crash-isolation is covered by
+    # tests/integration/test_code_indexing.py.
     source_dir = tmp_path / "src"
     source_dir.mkdir()
-    (source_dir / "good1.py").write_text("print('ok')")
-    (source_dir / "good2.py").write_text("print('ok too')")
-    (source_dir / "poison.py").write_text("print('boom')")
+    (source_dir / "good1.md").write_text("ok")
+    (source_dir / "good2.md").write_text("ok too")
+    (source_dir / "poison.md").write_text("boom")
     monkeypatch.chdir(tmp_path)
 
     original_raw_processor = coordinator_module.raw_processor
@@ -60,7 +66,7 @@ def test_partial_indexing_failure_is_reported_and_does_not_crash(
     def poisoned_processor(
         ctx: coordinator_module.ProcessorContext,
     ) -> coordinator_module.ProcessingOutcome:
-        if ctx.path.name == "poison.py":
+        if ctx.path.name == "poison.md":
             raise ValueError("simulated permanent parser failure")
         return original_raw_processor(ctx)
 

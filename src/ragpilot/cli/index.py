@@ -8,14 +8,22 @@ from typing import Annotated
 
 import typer
 
+from ragpilot.code.processor import code_processor
 from ragpilot.core import paths
 from ragpilot.core.errors import IndexingPartialFailureError
 from ragpilot.core.lifecycle import AppContext
-from ragpilot.indexing.coordinator import IndexCoordinator
+from ragpilot.core.models import FileKind
+from ragpilot.indexing.coordinator import IndexCoordinator, ProcessorRegistry, default_registry
 from ragpilot.sources.registry import SourceRegistry
 from ragpilot.storage.repositories import sources_repo
 
 from ._common import cli_command, console
+
+
+def _processor_registry() -> ProcessorRegistry:
+    registry = default_registry()
+    registry.register(FileKind.CODE, code_processor)
+    return registry
 
 
 @cli_command
@@ -38,6 +46,7 @@ def index(
                 return
 
             total_failed = 0
+            processors = _processor_registry()
             for source in sources:
                 project_id = paths.project_id_for_path(Path(source.path))
                 conn = ctx.project_conn(project_id)
@@ -48,6 +57,7 @@ def index(
                     source.include_patterns,
                     source.exclude_patterns,
                     ctx.config,
+                    processors=processors,
                 )
                 result = coordinator.run()
                 total_failed += result.failed

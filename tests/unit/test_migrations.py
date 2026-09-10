@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ragpilot.storage.migrations import apply_migrations, current_version
+from ragpilot.storage.migrations import MIGRATIONS, apply_migrations, current_version
 from ragpilot.storage.schema import CURRENT_SCHEMA_VERSION
 from ragpilot.storage.sqlite import connect
 
@@ -29,7 +29,7 @@ def test_apply_migrations_is_idempotent(tmp_path: Path) -> None:
         apply_migrations(conn, "knowledge")
         apply_migrations(conn, "knowledge")
         rows = conn.execute("SELECT COUNT(*) AS n FROM schema_migrations").fetchone()
-        assert rows["n"] == 1
+        assert rows["n"] == len(MIGRATIONS["knowledge"])
     finally:
         conn.close()
 
@@ -45,6 +45,7 @@ def test_knowledge_db_has_expected_tables(tmp_path: Path) -> None:
             ).fetchall()
         }
         assert {"files", "index_jobs", "index_errors", "schema_migrations", "metadata"} <= tables
+        assert {"entities", "relationships", "code_fts"} <= tables
     finally:
         conn.close()
 
