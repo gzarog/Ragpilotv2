@@ -131,6 +131,7 @@ def impact(
         callers = retrieval_graph.resolved_incoming(
             ctx,
             matches,
+            name,
             relationship_types=(RelationshipType.CALLS,),
             max_depth=max_depth,
             limit=limit,
@@ -143,7 +144,7 @@ def impact(
             limit=limit,
         )
         tests = retrieval_graph.find_tests_referencing(
-            ctx, matches, max_depth=max_depth, limit=limit
+            ctx, matches, name, max_depth=max_depth, limit=limit
         )
         documents, doc_confidences = _documentation(ctx, matches)
         defined = _defined_locations(ctx, matches)

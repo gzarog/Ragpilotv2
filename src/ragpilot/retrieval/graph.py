@@ -33,6 +33,7 @@ from ragpilot.code.graph import (
     conn_for_source_path,
     find_symbol_matches,
     traverse,
+    unresolved_symbol_edges,
 )
 from ragpilot.core.lifecycle import AppContext
 from ragpilot.core.models import Entity, FileRecord, RelationshipType
@@ -65,10 +66,13 @@ def references(
     limit: int = DEFAULT_LIMIT,
 ) -> tuple[list[SourceMatch], list[TraversalEdge]]:
     """All CALLS/IMPORTS/REFERENCES edges touching ``name``, either
-    direction -- see module docstring point 1.
+    direction -- see module docstring point 1. Incoming also merges in
+    unresolved (name-only) edges against ``name`` itself, same rationale
+    as ``resolved_incoming``.
     """
     matches = find_symbol_matches(ctx, name)
     edges: list[TraversalEdge] = []
+    seen_conns: list[sqlite3.Connection] = []
     for match in matches:
         conn = conn_for_source_path(ctx, match.source_path)
         edges.extend(
@@ -81,6 +85,13 @@ def references(
                 limit=limit,
             )
         )
+        if conn not in seen_conns:
+            seen_conns.append(conn)
+            edges.extend(
+                unresolved_symbol_edges(
+                    conn, name, relationship_types=REFERENCE_TYPES, limit=limit
+                )
+            )
         edges.extend(
             traverse(
                 conn,
@@ -133,6 +144,7 @@ def _resolve(
 def resolved_incoming(
     ctx: AppContext,
     matches: list[SourceMatch],
+    name: str,
     *,
     relationship_types: tuple[RelationshipType, ...],
     max_depth: int = DEFAULT_MAX_DEPTH,
@@ -140,8 +152,19 @@ def resolved_incoming(
 ) -> list[ResolvedEdge]:
     """Incoming edges of ``relationship_types`` into every match, each
     with its source (caller) entity/file resolved.
+
+    Also merges in unresolved (name-only) edges recorded against ``name``
+    itself -- see ``code/graph.py``'s ``traverse_symbol`` docstring for
+    why a resolved match does not make these redundant: a caller indexed
+    before ``name``'s defining file existed has its call recorded by
+    ``target_symbol`` alone, never retroactively upgraded, and would
+    otherwise be silently missing from ``impact``/``explore``'s callers.
+    Their resolved *source* (caller) entity is still exactly known --
+    it's only the target end, i.e. ``name`` itself, that was unresolved
+    at write time.
     """
     out: list[ResolvedEdge] = []
+    seen_conns: list[sqlite3.Connection] = []
     for match in matches:
         conn = conn_for_source_path(ctx, match.source_path)
         edges = traverse(
@@ -153,6 +176,12 @@ def resolved_incoming(
             limit=limit,
         )
         out.extend(_resolve(conn, match.source_id, e, "incoming") for e in edges)
+        if conn not in seen_conns:
+            seen_conns.append(conn)
+            unresolved = unresolved_symbol_edges(
+                conn, name, relationship_types=relationship_types, limit=limit
+            )
+            out.extend(_resolve(conn, match.source_id, e, "incoming") for e in unresolved)
     return out
 
 
@@ -206,6 +235,7 @@ def is_test_file(path: str) -> bool:
 def find_tests_referencing(
     ctx: AppContext,
     matches: list[SourceMatch],
+    name: str,
     *,
     max_depth: int = DEFAULT_MAX_DEPTH,
     limit: int = DEFAULT_LIMIT,
@@ -219,7 +249,7 @@ def find_tests_referencing(
     we this call/reference itself is real".
     """
     incoming = resolved_incoming(
-        ctx, matches, relationship_types=REFERENCE_TYPES, max_depth=max_depth, limit=limit
+        ctx, matches, name, relationship_types=REFERENCE_TYPES, max_depth=max_depth, limit=limit
     )
     return [
         edge

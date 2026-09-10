@@ -145,14 +145,14 @@ def _run(ctx: AppContext, query_plan: planner.QueryPlan) -> dict[str, Any]:
     if symbol_matches:
         if planner.Strategy.CALLERS in strategies:
             callers = retrieval_graph.resolved_incoming(
-                ctx, symbol_matches, relationship_types=(RelationshipType.CALLS,)
+                ctx, symbol_matches, symbol_query, relationship_types=(RelationshipType.CALLS,)
             )
         if planner.Strategy.CALLEES in strategies:
             callees = retrieval_graph.resolved_outgoing(
                 ctx, symbol_matches, relationship_types=(RelationshipType.CALLS,)
             )
         if planner.Strategy.TESTS in strategies:
-            tests = retrieval_graph.find_tests_referencing(ctx, symbol_matches)
+            tests = retrieval_graph.find_tests_referencing(ctx, symbol_matches, symbol_query)
 
     doc_link_evidence = _document_links(ctx, symbol_matches, strategies)
     symbol_display = symbol_matches[0].entity.qualified_name if symbol_matches else symbol_query
