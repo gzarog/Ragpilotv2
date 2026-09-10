@@ -895,3 +895,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     golden-query quality regression tests (Recall@K/MRR/NDCG) are left
     for a follow-up -- everything else in the blueprint's Definition of
     Done is addressed above.
+
+- Search Performance Redesign, follow-up: benchmark suite and golden-query
+  quality regression tests (blueprint sections 35/36/37, the two items the
+  previous entry above deferred).
+  - **Benchmark suite** (new top-level `benchmarks/search/` package,
+    `pytest -m benchmark_search`): a synthetic corpus generator
+    (`corpus.py`) writes entities/documents/embeddings directly through
+    the storage repositories -- no Tree-sitter/Docling parsing, no real
+    embedding model -- at the blueprint's suggested sizes
+    (`small`=5k/`medium`=50k/`large`=250k/`very_large`=1M embeddable
+    subjects), always including one deterministic "known" entity/
+    document/path so every query category has a guaranteed correct hit
+    regardless of size. `queries.py` builds the blueprint's eight
+    benchmark query categories against those known fixtures; `runner.py`
+    measures p50/p95 latency (with `search.cache` disabled, so repeated
+    calls measure the real pipeline, not a cache hit) and compares
+    against `targets.py`'s section-36 targets. Query-time embedding uses
+    a fast, deterministic hash-based stand-in (`fake_embedder.py`, the
+    same technique `test_semantic_retrieval.py` already used) rather
+    than the real model, so even the standalone
+    `python -m benchmarks.search --size large` script never touches a
+    network or a real ML model. Millisecond targets are reported, not
+    hard-asserted, in the automated `pytest`/CI coverage (a shared or
+    virtualized runner is not "normal developer hardware," the
+    blueprint's own stated measurement condition); `--strict` on the
+    standalone script is the form that actually enforces them, for a
+    real machine. CI runs the fast `small` size in a separate,
+    non-blocking job, the same style as `docling_pdf`/`embedding_model`
+    (see CONTRIBUTING.md's new `benchmark_search` section).
+  - **Golden-query quality regression test**
+    (`tests/integration/test_search_quality.py`, always-on/default
+    suite): indexes a small, fixed settlement/health-themed fixture
+    project through the real CLI pipeline (real Tree-sitter parsing,
+    unlike the latency benchmark's synthetic corpus) and evaluates every
+    query in the new `benchmarks/search/golden_queries.yaml` (a uniform
+    `{kind, path}` generalization of the blueprint's own
+    `expected`/`expected_paths`/`expected_documents` examples) via
+    binary-relevance Recall@5/@10, Mean Reciprocal Rank, and NDCG@10
+    (`benchmarks/search/quality.py`). Deliberately lexical-only: the
+    fixture's document text shares real vocabulary with its
+    "conceptual"-style golden queries, so lexical FTS alone already
+    answers them correctly, keeping this test offline and model-free.
+    NDCG's discounted-gain sum only credits a relevant key's *first*
+    occurrence -- multiple distinct entities retrieved from the same
+    relevant file must count as finding that file once, not once per
+    entity, otherwise NDCG could exceed its `[0, 1]` bound (caught by
+    this same golden query set during development).
+  - **Bug fix surfaced by the above**: `files_repo.py`'s path-FTS query
+    builder OR'd every token together (favoring recall, matching
+    `lexical.py`'s own content-search queries) -- but a path fragment's
+    tokens routinely include the file extension (`"py"`, `"md"`, ...),
+    and OR-ing a generic extension token in as its own clause matched
+    *every* file of that type. Changed to AND: a multi-token path query
+    now means "these tokens together," which a single-token query (the
+    common case) behaves identically under either way.
