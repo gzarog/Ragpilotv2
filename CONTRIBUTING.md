@@ -89,6 +89,29 @@ default suite. CI runs `embedding_model` tests too, in the same style as
 `docling_pdf`: a separate, non-blocking (`continue-on-error`) job -- see
 `.github/workflows/ci.yml`.
 
+### The install scripts (`install.sh` / `install.ps1`)
+
+`install.sh` and `install.ps1` at the repo root are what `README.md`'s
+`curl | sh` / `irm | iex` one-liners run. They download a branch/tag
+tarball or zipball from GitHub (`RAGPILOT_REF`, default `main`), create a
+venv, `pip install` the package into it, and link/launch `ragpilot` from a
+per-user bin directory (`RAGPILOT_BIN_DIR`, `RAGPILOT_INSTALL_DIR` to
+override). Run them locally exactly as CI does, pointed at a branch:
+
+```bash
+RAGPILOT_REF=my-branch RAGPILOT_INSTALL_DIR=/tmp/ragpilot-install RAGPILOT_BIN_DIR=/tmp/ragpilot-bin sh ./install.sh
+/tmp/ragpilot-bin/ragpilot version
+```
+
+```powershell
+$env:RAGPILOT_REF = "my-branch"; ./install.ps1
+```
+
+Like `docling_pdf`/`embedding_model`, this repeats a real network fetch
+plus torch/docling's dependency download, so CI runs it in a separate,
+non-blocking (`continue-on-error`) job across all three OSes -- see
+`.github/workflows/ci.yml`.
+
 ## Test isolation
 
 Every test must isolate RAGpilot's runtime directory via the `RAGPILOT_HOME`

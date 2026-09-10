@@ -147,3 +147,54 @@ jobs:
           key: embedding-model-hf-${{ runner.os }}
       - name: Pytest (embedding_model)
         run: pytest -m embedding_model -q
+
+  # Optional, non-blocking: runs install.sh/install.ps1 exactly as a real
+  # user would (curl/irm into a shell), pointed at *this* branch/commit via
+  # RAGPILOT_REF, and verifies the resulting `ragpilot` launcher actually
+  # works. Non-blocking because it repeats the same heavy dependency
+  # download (torch, docling) as the jobs above, on top of a real network
+  # fetch of the branch tarball/zipball from GitHub -- see CONTRIBUTING.md
+  # for the same commands run locally.
+  install-script-tests:
+    name: Install script (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run install.sh against this branch
+        env:
+          RAGPILOT_REF: ${{ github.head_ref || github.ref_name }}
+          RAGPILOT_INSTALL_DIR: ${{ runner.temp }}/ragpilot-install
+          RAGPILOT_BIN_DIR: ${{ runner.temp }}/ragpilot-bin
+        run: sh ./install.sh
+      - name: Verify the installed CLI works
+        run: |
+          "${{ runner.temp }}/ragpilot-bin/ragpilot" version
+          "${{ runner.temp }}/ragpilot-bin/ragpilot" doctor
+
+  install-script-tests-windows:
+    name: Install script (windows-latest)
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run install.ps1 against this branch
+        env:
+          RAGPILOT_REF: ${{ github.head_ref || github.ref_name }}
+          RAGPILOT_INSTALL_DIR: ${{ runner.temp }}\ragpilot-install
+          RAGPILOT_BIN_DIR: ${{ runner.temp }}\ragpilot-bin
+        run: ./install.ps1
+      - name: Verify the installed CLI works
+        run: |
+          & "${{ runner.temp }}\ragpilot-bin\ragpilot.cmd" version
+          & "${{ runner.temp }}\ragpilot-bin\ragpilot.cmd" doctor
