@@ -1,220 +1,134 @@
 # RAGpilot
 
-RAGpilot is a local-first knowledge compiler and retrieval engine for software repositories and organizational documents. It has no web UI: it is consumed via a CLI, an MCP server, and an optional local REST API.
+A local-first knowledge compiler and retrieval engine for software repositories and organizational documents.
 
-This repository is being built out in sequential, independently mergeable phases, each landing as its own pull request against `main`:
+## What is RAGpilot
 
-1. Production Foundation — CLI, configuration, source registry, SQLite storage, durable job queue, logging, health/doctor
-2. Code Intelligence — Tree-sitter parsing, symbol/reference extraction, code graph, FTS5
-3. Docling Document Pipeline — document ingestion, normalization, provenance, failure isolation
-4. Unified Knowledge Model — entity normalization, cross-domain (code <-> docs) linking, confidence/evidence model
-5. Retrieval — search, callers/callees, references, impact analysis, explore, query planner, context builder
-6. MCP Server — stdio MCP server and agent-facing tools
-7. Incremental Runtime — daemon, file watchers, polling, reconciliation, crash recovery
-8. Operations — backup/restore, upgrade/rollback, metrics, packaging, release integrity
-9. Optional Intelligence (this repository's current state) — local embeddings, vector retrieval, LLM provider abstraction, `ragpilot ask`
+RAGpilot turns a folder of source code and documents into a queryable, evidence-backed knowledge base that lives entirely on your machine. Point it at a repository and a docs folder, index them, and then ask questions like "what breaks if `SettlementService` changes?" or "who calls `bark_loudly`?" and get answers traced back to exact files, lines, and pages — not guesses.
 
-All 9 phases of the blueprint have now landed.
+It has no web UI. You use it three ways:
 
-See `CONTRIBUTING.md` for development setup and `SECURITY.md` for the security policy.
+- **CLI** — for humans, scripts, and CI (every command supports `--json`)
+- **MCP server** (`ragpilot serve --mcp`) — for AI coding agents (Claude Code, Cursor, etc.) that speak the [Model Context Protocol](https://modelcontextprotocol.io)
+- **A daemon** (`ragpilot watch` / `ragpilot daemon start`) that keeps the knowledge base current as files change
+
+Two things make it different from a typical embeddings-only RAG tool:
+
+- **Deterministic by default.** Symbol lookup, call graphs, full-text search, and cross-domain code↔doc linking all work with zero network access and zero LLM calls. Semantic (embedding-based) search and LLM-generated answers are opt-in extras layered on top, not the foundation.
+- **Evidence-first.** Every result — a caller, a linked document, a search hit — carries a confidence tier (`EXACT`/`HIGH`/`MEDIUM`/`HEURISTIC`) and a precise source location, so you can tell a compiler-grade fact from an inferred guess.
+
+Source files are always the source of truth; everything RAGpilot stores is derived, rebuildable state (`ragpilot rebuild` proves it).
+
+## Installation
+
+Requires **Python 3.12+**. RAGpilot isn't published on PyPI yet — install from a clone:
+
+```bash
+git clone https://github.com/gzarog/Ragpilotv2.git
+cd Ragpilotv2
+pip install -e .
+```
+
+This installs the `ragpilot` command. Verify it:
+
+```bash
+ragpilot version
+ragpilot doctor
+```
+
+For development (running the test suite, linting), install the `dev` extra instead:
+
+```bash
+pip install -e ".[dev]"
+```
+
+No system dependencies are required. On first use of a document source or semantic search, RAGpilot downloads and locally caches small ML models (Docling's layout model for PDFs, a sentence-embedding model) — after that, everything runs offline.
 
 ## Quick start
 
 ```bash
-pip install -e ".[dev]"
-ragpilot init
-ragpilot source add /path/to/a/repo/or/docs
-ragpilot index
-ragpilot status --json
-ragpilot doctor
-ragpilot symbol MyClass
-ragpilot callers my_function
-ragpilot callees my_function
-ragpilot references MyClass
-ragpilot docs --json
-ragpilot link list --json
-ragpilot link add MyClass.my_method path/to/document.md
-ragpilot search "MyClass"
-ragpilot impact MyClass
-ragpilot explore "what breaks if MyClass changes?"
-ragpilot install-agent --write ~/.config/some-mcp-client/ragpilot.json
-ragpilot serve --mcp
-ragpilot watch
-ragpilot daemon start
-ragpilot daemon status --json
-ragpilot daemon stop
-ragpilot backup
-ragpilot upgrade
-ragpilot rebuild --source SOURCE_ID
-ragpilot restore ~/.ragpilot/backups/ragpilot-backup-<timestamp>.tar.gz
-ragpilot config set search.semantic true
-ragpilot index
-ragpilot config set ai.provider ollama
-ragpilot config set ai.model llama3.2
-ragpilot ask "what does MyClass do?"
+ragpilot init                                    # create ~/.ragpilot (or %LOCALAPPDATA%\RAGpilot on Windows)
+ragpilot source add /path/to/a/repo/or/docs       # register a folder to index
+ragpilot index                                    # parse code + documents, build the knowledge graph
+ragpilot status --json                            # what got indexed
+ragpilot doctor                                   # health check
+
+ragpilot search "SettlementService"                # lexical search across code + docs
+ragpilot symbol SettlementService                  # look up a symbol
+ragpilot callers SettlementService                  # who calls it
+ragpilot impact SettlementService                   # blast-radius analysis: callers, docs, tests
+ragpilot explore "what breaks if SettlementService changes?"   # the primary retrieval command
+
+ragpilot serve --mcp                              # expose everything above to an MCP-speaking agent
+ragpilot watch                                     # keep indexing as files change (foreground)
+ragpilot backup                                    # snapshot the knowledge base
 ```
 
-Phase 1 shipped the CLI, layered configuration, the source registry, SQLite
-storage with WAL and migrations, a durable job queue with crash recovery,
-structured logging, and health checks, plus the processor-registry extension
-point later phases hook into.
+## Features
 
-Phase 2 adds Tree-sitter-based code intelligence: `ragpilot index` now
-parses recognized source files, extracts classes/interfaces/structs/enums,
-functions/methods/properties/fields, imports, inheritance, and calls into a
-normalized entity/relationship graph (stored alongside an FTS5 index over
-symbol names), and exposes it read-only via
-`ragpilot symbol|callers|callees|references`. Fully supported languages:
-**Python, JavaScript, TypeScript/TSX, Go, Java, Rust, C#**. A recognized code
-file with no grammar wired up yet (e.g. `.rb`, `.sql`, `.sh`) still indexes
-successfully, just without extracted entities. A file that fails to parse is
-isolated and recorded as failed, exactly like Phase 1's file-level fault
-isolation, and never aborts the run.
+### Code intelligence
+Tree-sitter-based parsing extracts classes, interfaces, structs, enums, functions, methods, properties, fields, imports, inheritance, and calls into a normalized entity/relationship graph, queryable via `ragpilot symbol|callers|callees|references`. Fully supported languages: **Python, JavaScript, TypeScript/TSX, Go, Java, Rust, C#**. A recognized file in an unsupported language still indexes (just without extracted entities); a file that fails to parse is isolated and recorded as failed without stopping the rest of the run.
 
-Phase 3 adds a Docling-backed document pipeline: `ragpilot index` now also
-converts document-kind files -- **PDF, DOCX, PPTX, XLSX, HTML, Markdown,
-TXT, EML** -- into a normalized heading/paragraph/table structure with page
-and heading-path provenance on every unit, stored alongside an FTS5 index
-over headings/body text/title, and exposed read-only via `ragpilot docs`.
-OCR, images, audio/video, OpenDocument, EPUB, and VLM pipelines are out of
-scope for this phase. A corrupt or unsupported document is isolated and
-recorded as failed (or, for an extension Phase 3 doesn't convert yet,
-indexed without derived content) rather than aborting the run; a PDF over
-`documents.max_pages` is marked `skipped_limit`. Docling's PDF pipeline
-downloads layout/table-structure model weights on first use -- tests that
-exercise it are marked `docling_pdf` and excluded from the default test run
-(see CONTRIBUTING.md).
+### Document ingestion
+A [Docling](https://github.com/docling-project/docling)-backed pipeline converts **PDF, DOCX, PPTX, XLSX, HTML, Markdown, TXT, and EML** files into a normalized heading/paragraph/table structure with page and heading-path provenance on every unit, exposed via `ragpilot docs`. A corrupt or unsupported document is isolated and recorded as failed rather than aborting the run.
 
-Phase 4 adds the unified knowledge model:
-`ragpilot index` now also runs a cross-domain linking pass, after each
-source's normal per-file indexing completes, connecting code entities to
-the documents that describe them. It matches on exact and fully-qualified
-identifiers, source filenames, a modest class-only alias, and (reusing
-Phase 2's `framework_rules.py` findings) HTTP route/method mentions --
-each tier scored on the same EXACT/HIGH/MEDIUM/HEURISTIC ladder Phase 2's
-resolver introduced. The pass is incremental (only files (re)indexed in
-that run are matched against the rest of the project) and never overrides
-an explicit, user-defined link. `ragpilot link add|remove|list` lets a
-person inspect the link graph and pin or remove a mapping by hand; Phase
-5's `explore`/`impact` will build its presentation on top of this. Fuzzy/
-semantic linking is explicitly out of scope (no embedding infrastructure
-exists yet -- that is Phase 9 -- and the blueprint bars semantic
-similarity from silently minting high-confidence facts even once it
-does). The MCP server lands in a later phase.
+### Cross-domain linking
+After indexing, RAGpilot connects code entities to the documents that describe them — matching on exact/qualified identifiers, filenames, and HTTP route mentions, each scored on the same confidence ladder as the code graph. `ragpilot link add|remove|list` lets you inspect the link graph and pin or remove a mapping by hand; automated linking never overrides an explicit one.
 
-Phase 5 adds retrieval: `ragpilot search QUERY` merges
-exact/qualified-identifier matches, `code_fts`/
-`document_fts` hits, file-path matches, and document title/heading
-matches into one ranked list. `ragpilot impact SYMBOL` reports a symbol's
-defining location, callers/callees (Phase 2's CALLS graph), cross-domain
-document links (Phase 4), a small naming-convention "tests" heuristic, and
-a documented LOW/MEDIUM/HIGH "blast radius" bucket. `ragpilot explore
-"QUERY"` is the primary retrieval command: a deterministic (no LLM) query
-planner picks which of the above strategies a query needs -- e.g. "who
-calls X" routes to graph traversal, "documents about X" routes to FTS --
-and assembles the result through a budgeted, deduplicated evidence
-package (`context:` config: `max_chars`/`max_files`/`max_graph_nodes`).
-Real semantic/vector search stays disabled by default
-(`search.semantic: false`); `retrieval/semantic.py` was only the seam at
-this point in the blueprint -- Phase 9 (below) implements it for real.
+### Search & retrieval
+- `ragpilot search QUERY` — ranked lexical search merging exact/qualified-symbol matches, full-text hits, and document title/heading matches.
+- `ragpilot explore "QUERY"` — the primary retrieval command: a deterministic query planner picks the right strategies (symbol lookup, graph traversal, full-text, document links) for the question and assembles a budgeted, deduplicated evidence package.
+- `ragpilot impact SYMBOL` — a symbol's defining location, callers/callees, linked documents, a naming-convention "tests" heuristic, and a LOW/MEDIUM/HIGH blast-radius bucket.
 
-Phase 6 adds the MCP server:
-`ragpilot serve --mcp` starts a stdio MCP server (built on the official
-`mcp` SDK's `FastMCP`) exposing 8 read-only tools --
-`ragpilot_explore` (primary), `ragpilot_search`, `ragpilot_symbol`,
-`ragpilot_callers`, `ragpilot_callees`, `ragpilot_impact`,
-`ragpilot_documents`, `ragpilot_status` -- each a thin adapter over the
-exact same functions its CLI counterpart calls, so an MCP-speaking agent
-sees exactly what the CLI shows. Every response is a deterministic,
-versioned Pydantic model (`schema_version`/`ok`/`error`); `ragpilot_explore`
-is bounded by Phase 5's context budget; every call is wrapped in a
-configurable wall-clock timeout (`mcp.request_timeout_seconds`, default
-30s); and any `RagpilotError` comes back as a typed, structured error
-instead of a raw traceback. `ragpilot install-agent [--write PATH]`
-prints the MCP client config snippet needed to register RAGpilot with a
-client such as Claude Desktop/Claude Code -- it never discovers or edits
-a real client config file on its own, only prints (and, with `--write`,
-writes to the exact path given).
+### MCP server (agent integration)
+`ragpilot serve --mcp` starts a stdio MCP server exposing `ragpilot_explore`, `ragpilot_search`, `ragpilot_symbol`, `ragpilot_callers`, `ragpilot_callees`, `ragpilot_impact`, `ragpilot_documents`, `ragpilot_status`, and `ragpilot_ask` — each a thin wrapper over the same functions backing the CLI, so an agent sees exactly what you'd see at the terminal. Responses are versioned, bounded in size, and every call has a configurable timeout. `ragpilot install-agent [--write PATH]` prints the config snippet needed to register RAGpilot with a client like Claude Code — it only prints/writes, it never edits a client's config file on its own.
 
-Phase 7 adds the incremental runtime:
-`ragpilot watch` runs a daemon in the foreground (`ragpilot daemon
-start|stop|restart|status [--json]` runs the same loop detached in the
-background) that watches every enabled source -- local roots via native
-OS filesystem events (`watchdog`, debounced by `indexing.debounce_ms`),
-network/UNC roots by polling on an interval
-(`indexing.network_poll_seconds`) -- and triggers the exact same per-source
-indexing pass `ragpilot index` runs, plus a periodic full reconciliation
-(`indexing.reconciliation_interval_seconds`, default 15 minutes) as a
-safety net independent of watcher events. Graceful shutdown
-(SIGINT/SIGTERM) lets an in-flight pass finish before releasing Phase 1's
-`RunLock`, never leaving partial state. This phase also fixes a
-correctness gap that predates the daemon: `ragpilot index` alone could
-previously misread a source root going offline (an unmounted network
-share, a deleted directory) as "every file in it was deleted", because
-`os.walk` silently returns nothing for a root it cannot list. A source
-root's reachability is now checked explicitly before any deletion is
-reconciled; an unreachable source flips to a new `offline` status (surfaced
-by `ragpilot source list|info` and, as a WARN rather than a failure, by
-`ragpilot doctor`) with every existing file/entity/document left
-untouched, and flips back to `active` -- reconciling for real -- the
-moment the root is reachable again.
+### Continuous indexing
+`ragpilot watch` (foreground) or `ragpilot daemon start|stop|restart|status` (background) watches every enabled source — local roots via native OS filesystem events, network/UNC roots by polling — and keeps the knowledge base current, plus a periodic full reconciliation as a safety net. A source that goes temporarily unreachable (an unmounted network share, a disconnected drive) is flagged `offline` rather than having its knowledge mistakenly deleted, and reconciles for real once it's back.
 
-Phase 8 adds operations: `ragpilot
-backup [PATH]` takes an online, consistent snapshot (SQLite's own backup
-API, not a raw file copy) of `sources.db` and every project's
-`knowledge.db` into one `.tar.gz` archive with a manifest -- never the
-original source files, which stay the user's own data on disk. `ragpilot
-restore ARCHIVE` verifies the archive and its schema versions, stops a
-running daemon, extracts and integrity-checks every database in a temp
-location, and only then atomically swaps it into place (a corrupted or
-incompatible archive is refused before anything live is touched).
-`ragpilot rebuild [--source ID]` wipes one or every source's
-`knowledge.db` and re-indexes it from scratch through the same pipeline
-`ragpilot index` uses -- the blueprint's "source files = truth, RAGpilot
-DB = rebuildable derived state" principle, runnable on demand. `ragpilot
-upgrade` checks every database for pending schema migrations, takes an
-automatic backup only when one is actually pending, applies migrations
-through the existing (Phase 1) migration system, and reuses `ragpilot
-doctor`'s health check to report the result -- there is no automatic
-rollback of an already-applied migration; the pre-upgrade backup is the
-documented recovery path. `ragpilot status --json` also reports real
-metrics (symbol/relationship/document counts, database size, queue
-depth) alongside the existing indexing summary. Packaging/release
-integrity is scoped to what this environment can do honestly:
-`scripts/generate_release_artifacts.py` and a tag-triggered
-`.github/workflows/release.yml` build the sdist/wheel, a checksum file,
-and a plain dependency manifest -- clearly labeled **unsigned**, since no
-code-signing infrastructure exists here; a standalone multi-platform
-executable bundle is out of scope for this phase.
+### Operations
+- `ragpilot backup [PATH]` — an online, consistent snapshot (SQLite's backup API, not a raw file copy) of the knowledge base into one archive. Never includes your original source files.
+- `ragpilot restore ARCHIVE` — verifies and integrity-checks a backup before atomically swapping it into place; a bad archive is refused before anything live is touched.
+- `ragpilot rebuild [--source ID]` — wipes and re-indexes a source from scratch, proving source files are the real truth.
+- `ragpilot upgrade` — applies pending schema migrations, backing up automatically first.
 
-Phase 9 (this repository's current state, the blueprint's final phase)
-adds optional intelligence, entirely opt-in: `explore`/`search`/`impact`/
-etc. behave exactly as before when `search.semantic` is left at its
-default `false` and no AI provider is configured. Setting
-`search.semantic: true` turns on real local semantic search -- text
-embeddings computed locally (`sentence-transformers/all-MiniLM-L6-v2`,
-run directly through `transformers`, no network needed once weights are
-cached) for touched files during `ragpilot index`, stored in a new,
-additive `embeddings` table separate from `entities`/`documents`, and
-compared via brute-force cosine similarity (a deliberately portable
-choice over a loadable SQLite extension like sqlite-vec, see
-`CHANGELOG.md`). `ragpilot search`/`ragpilot explore` then surface
-semantic hits as their own distinct, lower-confidence
-(`Confidence.HEURISTIC`) tier, never mixed into or upgrading a
-lexical/graph match. A new `ragpilot ask "QUESTION" [--json]` command
-runs the exact same deterministic retrieval `ragpilot explore` uses, then
-hands the question and that evidence to a configured `ai:` provider
-(OpenAI, Anthropic, Ollama, or any OpenAI-compatible endpoint) for a
-synthesized, evidence-grounded answer. A cloud provider always requires
-`privacy.external_ai_allowed: true` (defaults `false`); a local Ollama
-endpoint is exempt only when it actually resolves to loopback. `ragpilot
-serve --mcp` also exposes a `ragpilot_ask` tool alongside the existing 8
-read-only ones.
+### Optional: semantic search & AI-assisted answers
+Everything above works fully offline with no LLM. Two opt-in extras layer on top:
+- **Semantic search** (`ragpilot config set search.semantic true`): local sentence embeddings (no network once the model is cached) surface similarity-based results as their own clearly lower-confidence tier, never mixed into exact/graph matches.
+- **`ragpilot ask "QUESTION"`**: runs the same deterministic retrieval as `explore`, then hands the question and that evidence to a configured LLM provider (OpenAI, Anthropic, Ollama, or any OpenAI-compatible endpoint) for a synthesized, evidence-grounded answer. Cloud providers require explicitly opting in (`privacy.external_ai_allowed: true`); a local Ollama endpoint is exempt only when it actually resolves to loopback.
+
+## Configuration
+
+Settings live in `<runtime dir>/config.yaml` (`~/.ragpilot` on Linux/macOS, `%LOCALAPPDATA%\RAGpilot` on Windows) and can be read/written via `ragpilot config get|set`, e.g.:
+
+```bash
+ragpilot config set search.semantic true
+ragpilot config set ai.provider ollama
+ragpilot config set ai.model llama3.2
+```
+
+By default: no data leaves your machine, no telemetry is sent, and no external AI provider is called.
 
 ## Design principles
 
 - **Local-first**: source material and derived knowledge stay on disk by default.
-- **AI-optional**: search, graph traversal, and impact analysis work without any LLM or network access; local semantic search and `ragpilot ask` (Phase 9) are opt-in additions layered on top, never required.
+- **AI-optional**: search, graph traversal, and impact analysis work without any LLM or network access; semantic search and `ragpilot ask` are opt-in additions layered on top, never required.
 - **Source of truth**: source files are authoritative; the RAGpilot database is rebuildable derived state.
 - **Evidence-first**: every result traces back to a file, line/page, and section.
 - **Fault isolation**: one malformed file must never stop the indexer or crash the daemon.
+
+## Implementation history
+
+RAGpilot was built out in nine sequential, independently mergeable phases, each landed as its own pull request:
+
+1. Production Foundation — CLI, configuration, source registry, SQLite storage, durable job queue, logging, health/doctor
+2. Code Intelligence — Tree-sitter parsing, symbol/reference extraction, code graph, FTS5
+3. Docling Document Pipeline — document ingestion, normalization, provenance, failure isolation
+4. Unified Knowledge Model — entity normalization, cross-domain (code ↔ docs) linking, confidence/evidence model
+5. Retrieval — search, callers/callees, references, impact analysis, explore, query planner, context builder
+6. MCP Server — stdio MCP server and agent-facing tools
+7. Incremental Runtime — daemon, file watchers, polling, reconciliation, crash recovery, offline-source safety
+8. Operations — backup/restore, upgrade, rebuild, metrics, packaging/release integrity
+9. Optional Intelligence — local embeddings, semantic search, LLM provider abstraction, `ragpilot ask`
+
+See `CHANGELOG.md` for what shipped in each phase in detail, `CONTRIBUTING.md` for development setup, and `SECURITY.md` for the security policy.
