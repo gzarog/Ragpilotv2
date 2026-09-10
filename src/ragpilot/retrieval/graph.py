@@ -229,7 +229,10 @@ _TEST_FILE_PATTERNS = (
 
 
 def is_test_file(path: str) -> bool:
-    return any(pattern.search(path) for pattern in _TEST_FILE_PATTERNS)
+    # Patterns are written with "/" as the segment separator; stored file
+    # paths are platform-native (sources/scanner.py uses str(Path)), so on
+    # Windows they'd otherwise never match a "(?:^|/)"-anchored pattern.
+    return any(pattern.search(path.replace("\\", "/")) for pattern in _TEST_FILE_PATTERNS)
 
 
 def find_tests_referencing(

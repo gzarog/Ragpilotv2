@@ -24,6 +24,8 @@ from ragpilot.retrieval.graph import is_test_file
         "src/settlement.test.ts",
         "src/settlement.test.js",
         "src/settlement.spec.tsx",
+        r"D:\a\proj\proj\tests\test_settlement.py",  # Windows-style separators
+        r"C:\repo\pkg\handlers_test.go",
     ],
 )
 def test_recognizes_common_test_naming_conventions(path: str) -> None:
