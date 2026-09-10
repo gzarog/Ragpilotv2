@@ -228,3 +228,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     would be. Cross-domain linking is scoped to one project (one
     source's `knowledge.db`) at a time; it does not link across two
     different registered sources.
+
+- Phase 5: Retrieval.
+  - `retrieval/planner.py`: a small, deterministic (no LLM) query
+    classifier -- a bare identifier routes to identifier+FTS, "who calls
+    X"/"callers of X" routes to symbol lookup + incoming `CALLS` graph
+    traversal, "documents about X" routes to FTS (+ semantic once
+    `search.semantic` is enabled), and "what breaks if X changes"/"impact
+    of X" routes to symbol + callers + callees + tests + docs -- matching
+    the blueprint's own four illustrative examples (section 25). A small,
+    ordered set of regex rules, not an NLP query-understanding system, per
+    the blueprint's "initially deterministic" scope.
+  - `retrieval/lexical.py` and `ragpilot search QUERY [--limit N]
+    [--json]`: merges exact/qualified-identifier matches, `code_fts`/
+    `document_fts` hits, file-path substring matches, and document
+    title/heading matches into one ranked list. Ranking order: exact
+    symbol > qualified symbol > title/heading > FTS rank > path relevance,
+    with entity kind, file recency (mtime), and source id as deterministic
+    tie-breakers within a tier (there is no stored per-entity-kind
+    usage-frequency or source-priority signal in Phases 1-4 to rank
+    *across* tiers on, so those three fold in as tie-breakers instead of
+    being invented as new top-level signals).
+  - `retrieval/graph.py`: composes Phase 2's existing `code/graph.py` BFS
+    (`traverse`/`traverse_symbol`/`find_symbol_matches`) rather than
+    reimplementing graph walking. `cli/references.py`'s incoming+outgoing
+    CALLS/IMPORTS/REFERENCES aggregation was extracted here (behavior-
+    preserving refactor, same output) so `impact`/`explore` reuse it too.
+    Also adds edge *resolution* (`resolved_incoming`/`resolved_outgoing`,
+    pairing each traversal edge with its neighboring `Entity`/file) and
+    `is_test_file`/`find_tests_referencing`: a small, documented,
+    naming-convention filter (`test_*.py`, `*_test.py`/`.go`,
+    `*Test(s).cs`/`.java`, `*.test.ts(x)`/`*.spec.ts(x)`, etc.) over
+    Phase 2's already-stored CALLS/IMPORTS/REFERENCES edges -- not a new
+    test-framework-detection subsystem, and its result's provenance is a
+    filename guess, independent of each edge's own `Confidence`.
+  - `cli/impact.py` and `ragpilot impact SYMBOL [--max-depth N] [--limit
+    N] [--json]`: defining location(s), callers/callees (Phase 2's CALLS
+    graph -- the blueprint's "Produced by"/"Consumed by" vocabulary maps
+    onto `PRODUCES`/`CONSUMES` relationship types Phases 1-4 never
+    populate, see `core/models.py`), the tests heuristic above,
+    cross-domain document links (Phase 4's `links_repo`, shaped through
+    `knowledge/evidence.py`), a combined code/document confidence summary,
+    and a "blast radius" bucket. Blast radius is a deliberately simple,
+    documented heuristic -- `LOW` (score 0-2), `MEDIUM` (3-7), `HIGH`
+    (8+) -- over one count (distinct callers + distinct linked documents
+    touched), not a calibrated model.
+  - `retrieval/context_builder.py`: the blueprint's evidence-package
+    assembly (section 27) -- dedupes same-file/location evidence (keeping
+    the higher-confidence one), prioritizes exact evidence over heuristic,
+    and enforces a new `context:` config budget (`max_chars`, `max_files`,
+    `max_graph_nodes`, defaults 30000/20/100) with explicit, reported
+    truncation rather than a silent drop. Graph relationships are carried
+    as `A -[REL]-> B` paths, not just bare endpoints. A pure function with
+    no database access of its own, built on `knowledge/evidence.py`'s
+    existing evidence shape.
+  - `cli/explore.py` and `ragpilot explore "QUERY" [--json]`: the primary
+    retrieval command (blueprint section 25) -- runs the planner's chosen
+    strategies and returns Summary/Relevant symbols/Relevant paths/Call
+    flows/Dependencies/Documents/Tests/Requirements/Incidents/Evidence.
+    Summary is a short, deterministically-templated string, never an LLM
+    summary (no LLM is used anywhere in this phase). "Requirements" and
+    "Incidents" are document *categories* the blueprint lists as example
+    entity types (section 17) that Phases 1-4 never classify a document
+    into, so those two sections always come back empty rather than this
+    phase inventing a document classifier to fill them.
+  - `retrieval/semantic.py`: the seam for Phase 9's real semantic/vector
+    search -- returns a clearly-marked skipped result while
+    `search.semantic` is `false` (the default) and raises a specific,
+    typed `SemanticSearchNotImplementedError` if ever invoked while
+    enabled, so `planner.py` (and later Phase 6's MCP tools) have one
+    stable place to plug it in without this phase faking a result.
+  - Unit tests for the planner's classification rules (each blueprint
+    example plus supporting cases), lexical ranking (fixtures isolating
+    exact/qualified/FTS/path/title signals), the context builder's
+    dedup and all three budget knobs independently, the tests-heuristic
+    filename patterns, and blast-radius bucket boundaries; an end-to-end
+    integration test indexing a mixed code+document project with a
+    cross-domain link and exercising `search`/`impact`/`explore`
+    (including `--json`) through the real CLI.
