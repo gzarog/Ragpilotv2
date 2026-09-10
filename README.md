@@ -21,7 +21,34 @@ Source files are always the source of truth; everything RAGpilot stores is deriv
 
 ## Installation
 
-Requires **Python 3.12+**. RAGpilot isn't published on PyPI yet — install from a clone:
+Requires **Python 3.12+** already on your `PATH` — RAGpilot isn't published on PyPI yet, and these scripts don't install Python itself.
+
+### Install the CLI
+
+One command finds your Python, creates an isolated virtual environment, and installs `ragpilot`:
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/gzarog/Ragpilotv2/main/install.sh | sh
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/gzarog/Ragpilotv2/main/install.ps1 | iex
+```
+
+It installs into `~/.ragpilot` (`%LOCALAPPDATA%\RAGpilot` on Windows) and links `ragpilot` onto a per-user bin directory. If that directory isn't already on your `PATH`, the script prints the one-line fix (on Windows it adds it to your user `PATH` automatically — open a new terminal afterward).
+
+Verify it:
+
+```bash
+ragpilot version
+ragpilot doctor
+```
+
+### Install from source
+
+For development, or to track an unreleased change:
 
 ```bash
 git clone https://github.com/gzarog/Ragpilotv2.git
@@ -29,20 +56,13 @@ cd Ragpilotv2
 pip install -e .
 ```
 
-This installs the `ragpilot` command. Verify it:
-
-```bash
-ragpilot version
-ragpilot doctor
-```
-
-For development (running the test suite, linting), install the `dev` extra instead:
+For running the test suite and linting, install the `dev` extra instead:
 
 ```bash
 pip install -e ".[dev]"
 ```
 
-No system dependencies are required. On first use of a document source or semantic search, RAGpilot downloads and locally caches small ML models (Docling's layout model for PDFs, a sentence-embedding model) — after that, everything runs offline.
+No system dependencies are required beyond Python 3.12+. On first use of a document source or semantic search, RAGpilot downloads and locally caches small ML models (Docling's layout model for PDFs, a sentence-embedding model) — after that, everything runs offline.
 
 ## Quick start
 

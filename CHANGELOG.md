@@ -771,3 +771,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `search`/`explore`/`ask` integration coverage -- runs in the default
     suite using precomputed/fake vectors and a monkeypatched
     `embedder.embed_texts`, never the real model.
+
+- One-line install scripts (`install.sh` for macOS/Linux, `install.ps1`
+  for Windows), matching the `curl | sh` / `irm | iex` UX used by tools
+  like `rustup`/`deno`. Both scripts assume Python 3.12+ is already on
+  `PATH` -- they do not install Python itself -- and download the
+  package source for a given ref (`RAGPILOT_REF`, default `main`) from
+  GitHub, create an isolated virtual environment, `pip install` into it,
+  and link/launch `ragpilot` from a per-user bin directory, printing (or,
+  on Windows, applying) the `PATH` fix if that directory isn't already on
+  it. Documented in `README.md`'s Installation section and
+  `CONTRIBUTING.md`. A new, non-blocking `install-script-tests` CI job
+  (matrixed across all three OSes) runs each script for real -- a genuine
+  network fetch of the pushed branch plus a full `pip install` of the
+  package, including torch/docling -- and verifies the resulting
+  `ragpilot` launcher actually runs, mirroring the `docling-pdf-tests`/
+  `embedding-model-tests` non-blocking pattern.
