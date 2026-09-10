@@ -1,8 +1,8 @@
 # RAGpilot
 
-RAGpilot is a local-first knowledge compiler and retrieval engine for software repositories and organizational documents. It has no web UI: it is consumed via a CLI, an MCP server, and an optional local REST API.
+RAGpilot is a local-first knowledge compiler and retrieval engine for software repositories and organizational documents. It has no web UI: it is consumed via a CLI and an MCP server. A local REST API is reserved in configuration (`api:`, disabled by default) but not implemented by any phase below -- consuming RAGpilot programmatically today means the CLI's `--json` output or the MCP server, not HTTP.
 
-This repository is being built out in sequential, independently mergeable phases, each landing as its own pull request against `main`:
+This repository was built out in sequential, independently mergeable phases, each landed as its own pull request against `main`:
 
 1. Production Foundation — CLI, configuration, source registry, SQLite storage, durable job queue, logging, health/doctor
 2. Code Intelligence — Tree-sitter parsing, symbol/reference extraction, code graph, FTS5
@@ -12,9 +12,9 @@ This repository is being built out in sequential, independently mergeable phases
 6. MCP Server — stdio MCP server and agent-facing tools
 7. Incremental Runtime — daemon, file watchers, polling, reconciliation, crash recovery
 8. Operations — backup/restore, upgrade/rollback, metrics, packaging, release integrity
-9. Optional Intelligence (this repository's current state) — local embeddings, vector retrieval, LLM provider abstraction, `ragpilot ask`
+9. Optional Intelligence — local embeddings, vector retrieval, LLM provider abstraction, `ragpilot ask`
 
-All 9 phases of the blueprint have now landed.
+All 9 phases of the blueprint have landed on `main`.
 
 See `CONTRIBUTING.md` for development setup and `SECURITY.md` for the security policy.
 
@@ -100,7 +100,7 @@ person inspect the link graph and pin or remove a mapping by hand; Phase
 semantic linking is explicitly out of scope (no embedding infrastructure
 exists yet -- that is Phase 9 -- and the blueprint bars semantic
 similarity from silently minting high-confidence facts even once it
-does). The MCP server lands in a later phase.
+does). The MCP server did not exist yet at this point -- it is Phase 6, below.
 
 Phase 5 adds retrieval: `ragpilot search QUERY` merges
 exact/qualified-identifier matches, `code_fts`/
@@ -187,7 +187,7 @@ and a plain dependency manifest -- clearly labeled **unsigned**, since no
 code-signing infrastructure exists here; a standalone multi-platform
 executable bundle is out of scope for this phase.
 
-Phase 9 (this repository's current state, the blueprint's final phase)
+Phase 9 (the blueprint's final phase)
 adds optional intelligence, entirely opt-in: `explore`/`search`/`impact`/
 etc. behave exactly as before when `search.semantic` is left at its
 default `false` and no AI provider is configured. Setting
