@@ -47,8 +47,20 @@ def test_deleted_root_flips_from_accessible_to_not(tmp_path: Path) -> None:
     assert check_root_accessible(root) is not None
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
-@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permission bits")
+# Two stacked skipif marks each independently evaluate their condition
+# expression at module-collection time, on every platform, regardless of
+# the other mark -- os.geteuid() doesn't exist on Windows, so evaluating
+# it there crashes collection instead of skipping. Short-circuit into one
+# expression so it's never called off-POSIX.
+_skip_unreadable_root_test = sys.platform == "win32" or (
+    hasattr(os, "geteuid") and os.geteuid() == 0
+)
+
+
+@pytest.mark.skipif(
+    _skip_unreadable_root_test,
+    reason="POSIX permission bits only, and root ignores directory permission bits",
+)
 def test_unreadable_root_is_not_accessible(tmp_path: Path) -> None:
     root = tmp_path / "locked"
     root.mkdir()
