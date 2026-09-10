@@ -469,3 +469,137 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     graceful shutdown, PID/health bookkeeping -- is still fully covered
     by the default suite via direct unit/integration tests that never
     spawn a process.
+
+- Phase 8: Operations.
+  - **`ragpilot backup [PATH] [--json]`**: an online, consistent snapshot
+    of `sources.db` and every registered source's `knowledge.db`, packaged
+    into one `.tar.gz` archive alongside the user config and a
+    `manifest.json` (RAGpilot version, per-database schema version,
+    timestamp, included sources/projects). Uses SQLite's own
+    `sqlite3.Connection.backup()` API rather than a raw file copy -- a
+    plain copy of a WAL-mode database's main file can miss committed
+    writes still sitting only in the `-wal` file, or capture a torn
+    snapshot; the online backup API reads through SQLite's own
+    consistent-snapshot machinery instead, which is also what makes it
+    safe to run without stopping the daemon (proven by a test that backs
+    up while a write sits uncheckpointed in the WAL and asserts a naive
+    `shutil.copy2` of the same moment would have missed it). Deliberately
+    does **not** include the original source files -- those remain the
+    user's own data and the blueprint's source of truth; only
+    derived/registry state is backed up. Coordinates with a live
+    daemon/`ragpilot index` by acquiring the same `index` `RunLock` they
+    use per pass, rather than refusing outright.
+  - **`ragpilot restore ARCHIVE [--json]`**: verifies the archive
+    (readable tar.gz, has a manifest, every included database's `PRAGMA
+    integrity_check` passes), verifies the manifest's declared archive
+    format version and each database's schema version aren't newer than
+    this RAGpilot understands (refuses rather than silently risking
+    corruption), stops a running daemon first (reusing Phase 7's
+    `service/pid.py` detection/signaling, waiting for it to actually
+    exit), and only then **atomically swaps** the verified state into
+    place: every live path is first moved aside (not deleted) via
+    same-filesystem `os.rename` into a holding directory, the staged
+    (already-verified) state is renamed into place, and only on full
+    success is the holding directory discarded -- any failure during the
+    swap puts the moved-aside originals back, and every check before the
+    swap runs against the temp-extracted archive copy only, so a failure
+    at or before that point never touches the live runtime directory at
+    all. Restarts the daemon afterward only if it had been running.
+    Proven by an integration test that indexes a project, backs it up,
+    deletes the live `sources.db`/`projects/` entirely, restores, and
+    asserts `status`/`symbol` report identical data to before; and a
+    second test that a deliberately corrupted archive is refused with the
+    pre-restore state byte-for-byte (via `status --json`) unchanged
+    afterward.
+  - **`ragpilot rebuild [--source ID] [--json]`**: the blueprint's
+    "source files = truth, RAGpilot DB = rebuildable derived state"
+    principle made runnable -- deletes one source's (or every enabled
+    source's) `knowledge.db` outright (source files on disk are never
+    touched) and re-indexes it from scratch through the exact same
+    `indexing/runner.run_source_pass` Phase 7's daemon and `ragpilot
+    index` already use, rather than a second indexing implementation. A
+    new `AppContext.close_project_conn()` drops the cached connection
+    before the file is deleted, so a stale open handle can't keep the old
+    file alive underneath the delete. Proven by a test that indexes a
+    project, captures `symbol`/`callers`/`docs` output, rebuilds, and
+    asserts the same entities/relationships/documents come back
+    (comparing on stable, content-derived fields, since ids are freshly
+    generated on every index run).
+  - **`ragpilot upgrade [--json]`**: explicit, backup-first orchestration
+    of the existing migration system (`storage/migrations.py`) across
+    `sources.db` and every project's `knowledge.db` -- it does not
+    reimplement migration application, which was already idempotent and
+    automatic on every `AppContext.bootstrap()`/`project_conn()` call
+    since Phase 1. This command's value: it checks what's pending
+    *before* anything is touched (raw, read-only connections -- opening a
+    normal `AppContext` first would apply `sources.db`'s migrations as a
+    side effect and defeat the "before" half of a before/after report),
+    takes an automatic backup (reusing `ragpilot backup`'s own logic, not
+    a second implementation) only when a migration is actually pending,
+    then lets the normal bootstrap path apply it, and finally reuses
+    `ragpilot doctor`'s exact health-check logic (`cli/doctor.py`'s
+    `run_checks`/`overall_status`, the latter promoted from a private
+    helper for this reuse) to report whether the result looks healthy.
+    **No automatic rollback**: reversing an already-applied SQLite schema
+    migration safely (including undoing an additive `ALTER TABLE ADD
+    COLUMN`, which SQLite itself cannot drop on every version this
+    project supports) is meaningfully riskier and more complex than this
+    phase's priority ordering warrants; if `healthy_after` comes back
+    false, the documented recovery path is `ragpilot restore
+    <backup_archive>` using the backup this same command just took. A
+    no-pending-migrations run is a proven no-op (no backup taken, no
+    database file touched); a pending-migration run is proven to back up
+    first (its own copy of the database still shows the pre-upgrade
+    schema version) and apply the migration successfully afterward, using
+    the same "monkeypatch `storage.migrations.MIGRATIONS` down to an
+    earlier subset, apply, restore the real mapping" technique Phase 1's
+    migration tests established for constructing a stale database.
+  - **Metrics**: `ragpilot status --json` now also reports a `metrics`
+    block per source and in `totals` -- `symbols_created`/
+    `relationships_created` (Phase 2 entity/relationship counts),
+    `documents_processed` (Phase 3 document count), `database_size_bytes`
+    (actual file size on disk), and `files_discovered`/`files_indexed`/
+    `files_failed`/`index_queue_depth` (re-derived from data Phase 1
+    already tracked, under the blueprint's own metric names). All real,
+    cheaply-obtainable numbers computed directly from each project's
+    `knowledge.db` -- nothing here is fabricated. **Deliberately not
+    included**: a query-latency metric (e.g. average `explore`/`search`
+    duration) -- no code path in this codebase times a query today, and
+    adding a fake or hastily-wired one only to populate a metrics field
+    would violate the "real, honestly-obtainable data" bar this phase set
+    for itself; a real timing mechanism is left for whichever future
+    phase actually needs to act on query latency. No Prometheus/metrics-
+    server endpoint -- explicitly optional per the blueprint, not needed
+    to satisfy this phase's requirements.
+  - **Packaging/release integrity** (scoped down, same tradeoff Phase 3
+    made for Docling's PDF pipeline and Phase 7 made for daemon-subprocess
+    testing): `scripts/generate_release_artifacts.py` builds the sdist/
+    wheel via the project's existing `hatchling` backend (through the
+    standard `build` package), computes a `SHA256SUMS` checksum file, and
+    writes a plain, hand-rolled dependency manifest (`sbom.json`: name/
+    version/license per runtime dependency, read via `importlib.metadata`)
+    -- explicitly *not* a CycloneDX/SPDX-standard SBOM, since pulling in a
+    dedicated SBOM tool for this project's nine runtime dependencies would
+    be disproportionate tooling weight; the manifest says so in its own
+    `format_note` field. A new `.github/workflows/release.yml`, triggered
+    only on version tags (`v*.*.*`, never on a PR or a push to `main`, so
+    it cannot affect `ci.yml`'s gating), runs this script and attaches its
+    output to the tag's GitHub release. **Explicitly out of scope and not
+    attempted**: code signing (no signing certificate or secret exists in
+    this repository/environment -- a stubbed or fake signature would be
+    actively misleading, not a safe placeholder) and a standalone
+    single-executable bundle for 6 OS/arch targets (PyInstaller or
+    similar) -- a substantial, separate undertaking with its own risk
+    surface, judged out of reach for this PR. Every artifact this
+    workflow produces is clearly labeled **unsigned**, both in the
+    release body text and in `generate_release_artifacts.py`'s own
+    docstring/console output. Validated locally (per this phase's testing
+    requirements: a GitHub Actions tag trigger cannot be run locally) by
+    actually running the script end-to-end against a real build and
+    verifying the resulting `SHA256SUMS` with `sha256sum -c`.
+  - New `src/ragpilot/ops/` package (`backup.py`/`restore.py`/
+    `rebuild.py`/`upgrade.py`): the orchestration logic behind all four
+    commands above, kept separate from `cli/` (which stays a thin Typer
+    wrapper per command) so it is unit-testable without going through
+    Typer -- mirroring how `indexing/runner.py` already sits underneath
+    both `cli/index.py` and the Phase 7 daemon.

@@ -83,6 +83,20 @@ class AppContext:
             self._project_conns[project_id] = conn
         return conn
 
+    def close_project_conn(self, project_id: str) -> None:
+        """Drops and closes one cached project connection, if open.
+
+        Used by ``ragpilot rebuild`` (``ops/rebuild.py``) before deleting a
+        project's ``knowledge.db`` file out from under it -- an open WAL
+        connection holding the old file would otherwise keep its inode
+        alive/locked instead of the delete taking effect cleanly, and the
+        next ``project_conn`` call recreates a fresh, freshly-migrated
+        connection against the new (absent) file.
+        """
+        conn = self._project_conns.pop(project_id, None)
+        if conn is not None:
+            conn.close()
+
     def acquire_lock(self, name: str) -> RunLock:
         lock = RunLock(paths.locks_dir(self.home) / f"{name}.lock")
         lock.acquire()
