@@ -18,7 +18,7 @@ from ragpilot.sources.registry import SourceRegistry
 from ragpilot.sources.scanner import check_root_accessible
 from ragpilot.storage import schema
 from ragpilot.storage.migrations import current_version
-from ragpilot.storage.repositories import jobs_repo
+from ragpilot.storage.repositories import jobs_repo, vector_items_repo
 
 from ._common import cli_command, console, print_json
 
@@ -121,7 +121,40 @@ def run_checks(ctx: AppContext) -> list[CheckSection]:
         CheckSection("Disk", [CheckResult("free_space", disk_status, f"{free_gb:.0f} GB free")])
     )
 
+    # Search performance redesign, blueprint section 32: report which
+    # semantic-search ANN backend is actually resolvable and how many
+    # vectors/how much on-disk index size every source currently has --
+    # never a warn/fail on its own (an empty or bruteforce-fallback state
+    # is a normal, working configuration, not a health problem).
+    if ctx.config.search.semantic:
+        sections.append(CheckSection("Semantic", [_semantic_check(ctx, sources)]))
+
     return sections
+
+
+def _semantic_check(ctx: AppContext, sources: list[Any]) -> CheckResult:
+    from ragpilot.retrieval import embedder
+
+    try:
+        import usearch  # noqa: F401
+
+        engine = ctx.config.search.vector.engine
+        backend = "bruteforce" if engine == "bruteforce" else "usearch"
+    except ImportError:
+        backend = "bruteforce"
+
+    total_vectors = 0
+    total_bytes = 0
+    for source in sources:
+        project_id = paths.project_id_for_path(Path(source.path))
+        conn = ctx.project_conn(project_id)
+        total_vectors += vector_items_repo.count_all(conn, model_id=embedder.EMBEDDING_MODEL_ID)
+        index_path = paths.project_vector_index_path(project_id, ctx.home)
+        if index_path.is_file():
+            total_bytes += index_path.stat().st_size
+
+    detail = f"backend {backend}, {total_vectors} vector(s), {total_bytes / (1024**2):.1f} MB index"
+    return CheckResult("ann_backend", "ok", detail)
 
 
 def _overall_colour(overall: str) -> str:

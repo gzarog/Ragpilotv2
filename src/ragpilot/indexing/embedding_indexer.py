@@ -28,7 +28,12 @@ from collections.abc import Sequence
 
 from ragpilot.core.models import EmbeddingSubjectType, Entity
 from ragpilot.retrieval import embedder
-from ragpilot.storage.repositories import documents_repo, embeddings_repo, entities_repo
+from ragpilot.storage.repositories import (
+    documents_repo,
+    embeddings_repo,
+    entities_repo,
+    vector_items_repo,
+)
 from ragpilot.telemetry.logging import get_logger, log_event
 
 _logger = get_logger("embeddings")
@@ -91,6 +96,10 @@ def embed_touched_files(
     touched_files = set(touched_code_file_ids) | set(touched_document_file_ids)
     for file_id in touched_files:
         embeddings_repo.delete_by_file(conn, file_id)
+        # Mirrors embeddings_repo.delete_by_file: vector_items is the ANN
+        # index's own id-mapping table (blueprint section 13), regenerated
+        # in lockstep with embeddings so the two never drift apart.
+        vector_items_repo.delete_by_file(conn, file_id)
 
     for (subject_type, subject_id, file_id, _text), vector in zip(subjects, vectors, strict=True):
         embeddings_repo.insert(
@@ -101,6 +110,14 @@ def embed_touched_files(
             source_id=source_id,
             model_id=embedder.EMBEDDING_MODEL_ID,
             vector=vector,
+        )
+        vector_items_repo.insert(
+            conn,
+            subject_type=subject_type.value,
+            subject_id=subject_id,
+            file_id=file_id,
+            source_id=source_id,
+            model_id=embedder.EMBEDDING_MODEL_ID,
         )
 
     log_event(

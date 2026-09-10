@@ -26,7 +26,8 @@ from ragpilot.indexing.coordinator import (
 )
 from ragpilot.indexing.embedding_indexer import embed_touched_files
 from ragpilot.knowledge.linker import link_touched_files
-from ragpilot.storage.repositories import sources_repo
+from ragpilot.retrieval import ann, embedder
+from ragpilot.storage.repositories import embeddings_repo, sources_repo, vector_items_repo
 from ragpilot.storage.sqlite import transaction
 
 
@@ -125,6 +126,13 @@ def run_source_pass(
     if ctx.config.search.semantic and (
         result.touched_code_file_ids or result.touched_document_file_ids
     ):
+        touched_file_ids = [*result.touched_code_file_ids, *result.touched_document_file_ids]
+        # Captured *before* the transaction below deletes-and-reinserts
+        # vector_items for these files: the ANN index has no way to
+        # discover on its own which ids just went stale, so this is the
+        # only place that "before" snapshot is still available (blueprint
+        # section 14).
+        stale_vector_ids = vector_items_repo.list_vector_ids_by_file(conn, touched_file_ids)
         with transaction(conn):
             embedded = embed_touched_files(
                 conn,
@@ -132,6 +140,28 @@ def run_source_pass(
                 touched_code_file_ids=result.touched_code_file_ids,
                 touched_document_file_ids=result.touched_document_file_ids,
             )
+        if embedded:
+            # Deliberately outside the transaction above: the ANN index
+            # is a separate on-disk file, not part of the SQLite
+            # transaction's atomicity guarantee -- SQLite (already
+            # committed at this point) remains the authoritative source
+            # it can always be rebuilt from (blueprint section 49), so a
+            # failure here degrades to "ANN index lags until the next
+            # sync or an explicit `ragpilot vectors rebuild`", never to
+            # a corrupt or half-written knowledge.db.
+            dim = embeddings_repo.get_dim_for_model(conn, embedder.EMBEDDING_MODEL_ID)
+            if dim is not None:
+                ann.sync_index_for_files(
+                    conn,
+                    project_id=project_id,
+                    home=ctx.home,
+                    engine=ctx.config.search.vector.engine,
+                    ndim=dim,
+                    model_id=embedder.EMBEDDING_MODEL_ID,
+                    removed_vector_ids=stale_vector_ids,
+                    touched_file_ids=touched_file_ids,
+                    rebuild_deleted_ratio=ctx.config.search.vector.rebuild_deleted_ratio,
+                )
 
     sources_repo.update_scan_result(
         ctx.sources_conn,

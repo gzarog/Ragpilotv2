@@ -121,6 +121,20 @@ def count_all(conn: sqlite3.Connection) -> int:
     return int(row["n"])
 
 
+def get_dim_for_model(conn: sqlite3.Connection, model_id: str) -> int | None:
+    """The vector dimensionality currently stored for ``model_id``, or
+    ``None`` if this project has no such embeddings yet -- an ANN index
+    (``retrieval/ann.py``) needs a fixed ``ndim`` at construction time,
+    so this is read from the data itself rather than assumed to be
+    ``retrieval/embedder.EMBEDDING_DIM``: tests (and any future
+    configurable embedding model) may use a different one.
+    """
+    row = conn.execute(
+        "SELECT dim FROM embeddings WHERE model_id = ? LIMIT 1", (model_id,)
+    ).fetchone()
+    return int(row["dim"]) if row is not None else None
+
+
 def clear_all(conn: sqlite3.Connection) -> None:
     """Drops every embedding in this project -- used by tests to prove
     semantic search degrades gracefully when embeddings are missing.

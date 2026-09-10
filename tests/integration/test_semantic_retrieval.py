@@ -271,3 +271,40 @@ def test_explain_reports_per_stage_timings(
     assert text_result.exit_code == 0, text_result.output
     assert "Query kind:" in text_result.output
     assert "Total:" in text_result.output
+
+
+def test_vectors_rebuild_and_doctor_report_the_ann_backend(
+    ragpilot_home: Path, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Blueprint sections 15/32: ``ragpilot vectors rebuild`` regenerates
+    the persistent ANN index from SQLite, and ``ragpilot doctor`` reports
+    which backend is active and how many vectors it holds.
+    """
+    root = tmp_path / "project"
+    _write_project(root)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("RAGPILOT_SEARCH__SEMANTIC", "true")
+
+    assert runner.invoke(app, ["init"]).exit_code == 0
+    assert runner.invoke(app, ["source", "add", str(root)]).exit_code == 0
+    assert runner.invoke(app, ["index"]).exit_code == 0
+
+    rebuild_result = runner.invoke(app, ["vectors", "rebuild", "--json"])
+    assert rebuild_result.exit_code == 0, rebuild_result.output
+    payload = json.loads(rebuild_result.output)["data"]
+    assert payload["rebuilt"][0]["backend"] == "usearch"
+    assert payload["rebuilt"][0]["vectors"] > 0
+
+    from ragpilot.core import paths
+
+    project_id = paths.project_id_for_path(root)
+    index_path = paths.project_vector_index_path(project_id, ragpilot_home)
+    assert index_path.is_file()
+
+    doctor_result = runner.invoke(app, ["doctor", "--json"])
+    assert doctor_result.exit_code == 0, doctor_result.output
+    doctor_payload = json.loads(doctor_result.output)["data"]
+    semantic_section = next(s for s in doctor_payload["sections"] if s["name"] == "Semantic")
+    detail = semantic_section["checks"][0]["detail"]
+    assert "usearch" in detail
+    assert "vector(s)" in detail
