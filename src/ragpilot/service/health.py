@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -41,8 +42,13 @@ def write_health(home: Path, health: DaemonHealth) -> None:
     # Write-then-rename: `daemon status` reads this file from an
     # unrelated process at an arbitrary moment, and a torn write (partial
     # JSON) would otherwise be a real, if narrow, race -- os.replace is
-    # atomic on both POSIX and Windows.
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    # atomic on both POSIX and Windows. The daemon's worker thread and its
+    # separate reconciliation thread can both call this concurrently
+    # (see service/daemon.py) -- a *fixed* tmp filename let one thread's
+    # rename consume the other's tmp file first, so the second thread's
+    # own os.replace then raised FileNotFoundError. Suffix with pid+tid so
+    # concurrent writers never share a tmp path.
+    tmp_path = path.with_suffix(f"{path.suffix}.{os.getpid()}.{threading.get_ident()}.tmp")
     tmp_path.write_text(json.dumps(payload), encoding="utf-8")
     os.replace(tmp_path, path)
 
