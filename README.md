@@ -11,8 +11,10 @@ This repository is being built out in sequential, independently mergeable phases
 5. Retrieval — search, callers/callees, references, impact analysis, explore, query planner, context builder
 6. MCP Server — stdio MCP server and agent-facing tools
 7. Incremental Runtime — daemon, file watchers, polling, reconciliation, crash recovery
-8. Operations (this repository's current state) — backup/restore, upgrade/rollback, metrics, packaging, release integrity
-9. Optional Intelligence — vector retrieval, reranking, local embeddings, LLM provider abstraction
+8. Operations — backup/restore, upgrade/rollback, metrics, packaging, release integrity
+9. Optional Intelligence (this repository's current state) — local embeddings, vector retrieval, LLM provider abstraction, `ragpilot ask`
+
+All 9 phases of the blueprint have now landed.
 
 See `CONTRIBUTING.md` for development setup and `SECURITY.md` for the security policy.
 
@@ -45,6 +47,11 @@ ragpilot backup
 ragpilot upgrade
 ragpilot rebuild --source SOURCE_ID
 ragpilot restore ~/.ragpilot/backups/ragpilot-backup-<timestamp>.tar.gz
+ragpilot config set search.semantic true
+ragpilot index
+ragpilot config set ai.provider ollama
+ragpilot config set ai.model llama3.2
+ragpilot ask "what does MyClass do?"
 ```
 
 Phase 1 shipped the CLI, layered configuration, the source registry, SQLite
@@ -107,8 +114,9 @@ planner picks which of the above strategies a query needs -- e.g. "who
 calls X" routes to graph traversal, "documents about X" routes to FTS --
 and assembles the result through a budgeted, deduplicated evidence
 package (`context:` config: `max_chars`/`max_files`/`max_graph_nodes`).
-Real semantic/vector search stays disabled (`search.semantic: false`);
-`retrieval/semantic.py` is only the seam Phase 9 will implement.
+Real semantic/vector search stays disabled by default
+(`search.semantic: false`); `retrieval/semantic.py` was only the seam at
+this point in the blueprint -- Phase 9 (below) implements it for real.
 
 Phase 6 adds the MCP server:
 `ragpilot serve --mcp` starts a stdio MCP server (built on the official
@@ -151,7 +159,7 @@ by `ragpilot source list|info` and, as a WARN rather than a failure, by
 untouched, and flips back to `active` -- reconciling for real -- the
 moment the root is reachable again.
 
-Phase 8 (this repository's current state) adds operations: `ragpilot
+Phase 8 adds operations: `ragpilot
 backup [PATH]` takes an online, consistent snapshot (SQLite's own backup
 API, not a raw file copy) of `sources.db` and every project's
 `knowledge.db` into one `.tar.gz` archive with a manifest -- never the
@@ -179,10 +187,34 @@ and a plain dependency manifest -- clearly labeled **unsigned**, since no
 code-signing infrastructure exists here; a standalone multi-platform
 executable bundle is out of scope for this phase.
 
+Phase 9 (this repository's current state, the blueprint's final phase)
+adds optional intelligence, entirely opt-in: `explore`/`search`/`impact`/
+etc. behave exactly as before when `search.semantic` is left at its
+default `false` and no AI provider is configured. Setting
+`search.semantic: true` turns on real local semantic search -- text
+embeddings computed locally (`sentence-transformers/all-MiniLM-L6-v2`,
+run directly through `transformers`, no network needed once weights are
+cached) for touched files during `ragpilot index`, stored in a new,
+additive `embeddings` table separate from `entities`/`documents`, and
+compared via brute-force cosine similarity (a deliberately portable
+choice over a loadable SQLite extension like sqlite-vec, see
+`CHANGELOG.md`). `ragpilot search`/`ragpilot explore` then surface
+semantic hits as their own distinct, lower-confidence
+(`Confidence.HEURISTIC`) tier, never mixed into or upgrading a
+lexical/graph match. A new `ragpilot ask "QUESTION" [--json]` command
+runs the exact same deterministic retrieval `ragpilot explore` uses, then
+hands the question and that evidence to a configured `ai:` provider
+(OpenAI, Anthropic, Ollama, or any OpenAI-compatible endpoint) for a
+synthesized, evidence-grounded answer. A cloud provider always requires
+`privacy.external_ai_allowed: true` (defaults `false`); a local Ollama
+endpoint is exempt only when it actually resolves to loopback. `ragpilot
+serve --mcp` also exposes a `ragpilot_ask` tool alongside the existing 8
+read-only ones.
+
 ## Design principles
 
 - **Local-first**: source material and derived knowledge stay on disk by default.
-- **AI-optional**: search, graph traversal, and impact analysis work without any LLM or network access.
+- **AI-optional**: search, graph traversal, and impact analysis work without any LLM or network access; local semantic search and `ragpilot ask` (Phase 9) are opt-in additions layered on top, never required.
 - **Source of truth**: source files are authoritative; the RAGpilot database is rebuildable derived state.
 - **Evidence-first**: every result traces back to a file, line/page, and section.
 - **Fault isolation**: one malformed file must never stop the indexer or crash the daemon.

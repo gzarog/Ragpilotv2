@@ -257,3 +257,57 @@ def test_timeout_returns_structured_error_not_a_hang(
     # Well under the 0.5s sleep -- proves the call returned on the
     # timeout, not once the slow call finally completed.
     assert elapsed < 0.3
+
+
+def test_ragpilot_ask_returns_the_mocked_provider_answer_with_real_evidence(
+    indexed_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ragpilot.ai.base import AiAnswer, AiRequest, AiUsage
+    from ragpilot.cli import ask as ask_cli
+
+    class _FakeProvider:
+        def answer(self, request: AiRequest) -> AiAnswer:
+            assert request.evidence != []
+            return AiAnswer(
+                text="Answer grounded in evidence.",
+                provider="fake",
+                model="fake-1",
+                usage=AiUsage(input_tokens=1, output_tokens=1),
+            )
+
+    monkeypatch.setattr(ask_cli, "_build_provider", lambda ctx: _FakeProvider())
+
+    result = asyncio.run(
+        tools.ragpilot_ask(question="what breaks if AnimalService changes?")
+    )
+
+    assert result.ok is True
+    assert result.answer is not None
+    assert result.answer.text == "Answer grounded in evidence."
+    assert result.answer.provider == "fake"
+    assert result.evidence != []
+
+
+def test_ragpilot_ask_without_a_configured_provider_is_a_structured_error(
+    indexed_project: Path,
+) -> None:
+    result = asyncio.run(tools.ragpilot_ask(question="what does AnimalService do?"))
+
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.type == "AiNotConfiguredError"
+    assert result.answer is None
+
+
+def test_ragpilot_ask_blocked_by_privacy_flag_is_a_structured_error(
+    indexed_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RAGPILOT_AI__PROVIDER", "openai")
+    monkeypatch.setenv("RAGPILOT_AI__MODEL", "gpt-test")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    result = asyncio.run(tools.ragpilot_ask(question="what does AnimalService do?"))
+
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.type == "AiPrivacyBlockedError"

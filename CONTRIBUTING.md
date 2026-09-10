@@ -67,6 +67,28 @@ only guards the process-spawning/signaling plumbing around it. CI runs
 separate, non-blocking (`continue-on-error`) job -- see
 `.github/workflows/ci.yml`.
 
+### The `embedding_model` marker
+
+Phase 9's local semantic search (`retrieval/embedder.py`) loads a real
+`sentence-transformers/all-MiniLM-L6-v2` model via `transformers`, which
+downloads and caches its weights from Hugging Face on first use -- the
+same real-network-dependency shape as `docling_pdf`'s model download, so
+it gets the same treatment: tests that actually load the model are
+marked `@pytest.mark.embedding_model` and excluded from the default run
+(`pyproject.toml`'s `addopts`). Run them explicitly:
+
+```bash
+pytest -m embedding_model -q
+```
+
+Everything else in Phase 9 -- vector storage/cosine similarity
+(`retrieval/vectorstore.py`), the `embeddings` table repository, semantic
+search's degrade-gracefully paths, and the AI provider abstraction -- is
+tested with precomputed/fake vectors and mocked HTTP, and runs in the
+default suite. CI runs `embedding_model` tests too, in the same style as
+`docling_pdf`: a separate, non-blocking (`continue-on-error`) job -- see
+`.github/workflows/ci.yml`.
+
 ## Test isolation
 
 Every test must isolate RAGpilot's runtime directory via the `RAGPILOT_HOME`
@@ -84,6 +106,8 @@ source files are involved. Tests must never read or write the real
 - `src/ragpilot/indexing/` — scan/classify/enqueue/process orchestration
 - `src/ragpilot/code/` — Tree-sitter parsing, extraction, resolution, framework heuristics
 - `src/ragpilot/documents/` — Docling adapter, normalization, chunking, metadata
+- `src/ragpilot/retrieval/` — lexical/semantic search, graph traversal, context budgeting
+- `src/ragpilot/ai/` — LLM provider abstraction for `ragpilot ask` (Phase 9)
 - `src/ragpilot/telemetry/` — structured logging
 - `src/ragpilot/security/` — path containment and secret-file exclusion
 

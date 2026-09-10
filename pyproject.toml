@@ -35,6 +35,31 @@ dependencies = [
     # pure-Python-with-native-backends, no heavy transitive deps (unlike
     # docling's torch pull above).
     "watchdog>=4,<7",
+    # Phase 9: local sentence embeddings (retrieval/embedder.py) run
+    # directly through `transformers`'s AutoTokenizer/AutoModel rather
+    # than adding the `sentence-transformers` package -- both `torch` and
+    # `transformers` are already required transitively via Docling's own
+    # PDF pipeline (see documents/docling_adapter.py), so this is a
+    # version-pin declaration of an already-present dependency, not new
+    # footprint; `sentence-transformers` itself would additionally pull
+    # in scikit-learn/scipy/Pillow/tqdm for what is, for one fixed model,
+    # ~15 lines of mean-pooling. See retrieval/embedder.py's docstring.
+    "transformers>=4.40",
+    # Phase 9: real OpenAI/Anthropic API clients (ai/openai.py,
+    # ai/anthropic.py). Pinned below each SDK's newer major version:
+    # both switched, at the time of writing, to a much newer, internally
+    # forked HTTP client that this project's provider modules were not
+    # written or tested against -- the pinned ranges are each package's
+    # well-documented, `httpx`-based surface, which is also what makes
+    # dependency-injecting a mock `httpx.Client` for tests reliable (see
+    # ai/openai.py's docstring).
+    "openai>=1.0,<2",
+    "anthropic>=0.25,<1",
+    # Phase 9: ai/ollama.py's local HTTP client, and every provider
+    # module's `http_client` test-injection seam. Already a transitive
+    # dependency (via `mcp`); declared explicitly since first-party code
+    # now imports it directly.
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
@@ -100,8 +125,9 @@ testpaths = ["tests"]
 # is -- the daemon *loop*/debounce/reconciliation/offline-online logic
 # it would otherwise gate is already fully covered by direct unit tests
 # that never spawn a process (see CONTRIBUTING.md).
-addopts = "-ra -m 'not docling_pdf and not daemon_subprocess'"
+addopts = "-ra -m 'not docling_pdf and not daemon_subprocess and not embedding_model'"
 markers = [
     "docling_pdf: exercises Docling's real PDF conversion pipeline (network + model download on first run); excluded from the default run, see CONTRIBUTING.md",
     "daemon_subprocess: spawns and signals a real detached `ragpilot daemon` process; excluded from the default run, see CONTRIBUTING.md",
+    "embedding_model: loads the real local embedding model (network + weight download on first run); excluded from the default run, see CONTRIBUTING.md",
 ]

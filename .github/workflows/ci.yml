@@ -119,3 +119,31 @@ jobs:
         run: pip install -e ".[dev]"
       - name: Pytest (daemon_subprocess)
         run: pytest -m daemon_subprocess -q
+
+  # Optional, non-blocking: actually loads Phase 9's real local embedding
+  # model (Hugging Face weight download included). Kept separate from
+  # `test` above so a slow/unavailable model download never gates a
+  # merge -- same rationale and pattern as `docling-pdf-tests` above; see
+  # CONTRIBUTING.md for the same command run locally.
+  embedding-model-tests:
+    name: Embedding model tests (non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install CPU-only torch (Linux runners pull CUDA by default)
+        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+      - name: Install project
+        run: pip install -e ".[dev]"
+      - name: Cache embedding model weights
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: embedding-model-hf-${{ runner.os }}
+      - name: Pytest (embedding_model)
+        run: pytest -m embedding_model -q
