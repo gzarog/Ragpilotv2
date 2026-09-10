@@ -318,3 +318,37 @@ KNOWLEDGE_DB_V5: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_embeddings_file ON embeddings(file_id)",
     "CREATE INDEX IF NOT EXISTS idx_embeddings_model ON embeddings(model_id)",
 )
+
+# PDF documents are converted via a Markdown round-trip (see
+# ``documents/docling_adapter.py``'s module docstring): Docling's real PDF
+# layout/table-structure pipeline runs once, exports to Markdown, and that
+# Markdown is what actually gets normalized/chunked/indexed. The PDF
+# pipeline is the expensive step (a real ML model), so this table caches
+# its Markdown output keyed by the file's *content hash* rather than its
+# file id or path -- a moved, renamed, or duplicated PDF with identical
+# bytes still hits the cache, and re-indexing an unchanged PDF never
+# re-runs the model.
+#
+# ``cache_version`` guards against a cached row being misinterpreted after
+# the marker string or ``export_to_markdown`` options change: a lookup
+# that finds a row with a stale ``cache_version`` must treat it as a miss
+# (see ``document_conversion_cache_repo.get``), not hand back Markdown
+# that no longer matches how callers reparse it.
+#
+# Purely derived, disposable state -- like ``embeddings``, losing this
+# table only costs a slower next index run, never correctness -- and it is
+# never actively pruned: a changed PDF gets a new ``content_hash`` and a
+# new row, and the stale row for the old hash is simply orphaned. That is
+# an acceptable, unbounded-but-slow-growing cost at this project's scale,
+# matching ``embeddings``' own "never actively GC'd" precedent.
+KNOWLEDGE_DB_V6: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS document_conversion_cache (
+        content_hash TEXT PRIMARY KEY,
+        markdown TEXT NOT NULL,
+        page_count INTEGER,
+        cache_version INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+    )
+    """,
+)

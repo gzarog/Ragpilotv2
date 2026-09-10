@@ -787,3 +787,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   package, including torch/docling -- and verifies the resulting
   `ragpilot` launcher actually runs, mirroring the `docling-pdf-tests`/
   `embedding-model-tests` non-blocking pattern.
+
+- PDF documents are now converted through a Markdown round-trip rather
+  than normalized straight off Docling's PDF-layout output
+  (`documents/docling_adapter.py`). After Docling's real PDF pipeline
+  (layout/table-structure models) produces its `DoclingDocument`, it is
+  exported to Markdown text (`export_to_markdown`, with a plain-text page
+  break placeholder inserted at each page transition -- an HTML-comment-
+  style placeholder is silently dropped by Docling's Markdown parser on
+  reparse, so a literal marker string wrapped in U+2063 INVISIBLE
+  SEPARATOR is used instead) and reparsed through Docling's own Markdown
+  backend into a second `DoclingDocument`, and it is *that* document
+  that actually gets normalized/chunked/indexed. The Markdown text is
+  cached by the PDF's content hash in a new `document_conversion_cache`
+  table (`storage/schema.py`'s additive `KNOWLEDGE_DB_V6`/migration 6,
+  keyed by content hash rather than file id so a moved/renamed/
+  duplicated PDF with identical bytes still hits the cache, versioned via
+  a `cache_version` column so a future change to the marker or export
+  options can't misinterpret old cached Markdown), so re-indexing an
+  unchanged PDF never re-runs the expensive PDF ML pipeline again -- only
+  the cheap Markdown reparse. Purely derived, disposable state, never
+  actively pruned, mirroring `embeddings`' own precedent. A reparsed-
+  from-Markdown document carries no page provenance on any item (empty
+  `prov`, `num_pages() == 0`), so `docling_adapter.convert` now returns a
+  `ConversionResult` (document plus an optional real page count and page-
+  break marker, both `None` for every non-PDF format) and
+  `normalizer.normalize` gained two keyword-only overrides to reconstruct
+  page numbers by counting marker crossings instead of reading
+  `item.prov`. Every other format (DOCX/PPTX/XLSX/HTML/Markdown/TXT/EML)
+  is completely unaffected. Proven end to end with the real PDF pipeline
+  under the `docling_pdf` marker: cache population, cache reuse (a second
+  `convert()` call against the same connection is proven to never touch
+  the PDF-pipeline singleton again), and the existing page-provenance
+  golden test's assertions hold unchanged through the Markdown round-trip.

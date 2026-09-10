@@ -11,6 +11,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from docling_core.types.doc import DocItemLabel
+from docling_core.types.doc.document import DoclingDocument
+
+from ragpilot.core.models import DocumentFormat
 from ragpilot.documents import chunker, docling_adapter, normalizer
 from ragpilot.documents.metadata import extract_metadata
 
@@ -20,10 +24,15 @@ FIXTURES = Path(__file__).parent.parent / "fixtures" / "documents"
 def _convert(name: str):  # noqa: ANN201 - test helper
     path = FIXTURES / name
     doc_format = docling_adapter.detect_format(path)
-    doc = docling_adapter.convert(path)
-    normalized = normalizer.normalize(doc, doc_format)
+    conversion = docling_adapter.convert(path)
+    normalized = normalizer.normalize(
+        conversion.document,
+        doc_format,
+        page_count_override=conversion.page_count,
+        page_break_marker=conversion.page_break_marker,
+    )
     chunks = chunker.chunk_document(normalized)
-    meta = extract_metadata(doc, normalized, doc_format, path)
+    meta = extract_metadata(conversion.document, normalized, doc_format, path)
     return doc_format, normalized, chunks, meta
 
 
@@ -139,3 +148,48 @@ def test_corrupt_docx_raises_document_conversion_error() -> None:
         pass
     else:
         raise AssertionError("expected DocumentConversionError")
+
+
+def test_page_break_marker_reconstructs_page_numbers_without_prov() -> None:
+    """Proves ``normalizer.normalize``'s marker-based page reconstruction
+    in isolation: a synthetic ``DoclingDocument`` built with no ``prov`` on
+    any item, exactly matching the shape a real PDF's Markdown-backend
+    reparse produces (see ``docling_adapter``'s module docstring) -- no
+    real PDF or ML model involved.
+    """
+    marker = docling_adapter.PAGE_BREAK_MARKER
+    doc = DoclingDocument(name="synthetic")
+    doc.add_title("Doc Title")
+    doc.add_text(DocItemLabel.TEXT, "Page one text.")
+    doc.add_text(DocItemLabel.TEXT, marker)
+    doc.add_heading("Section Two", level=1)
+    doc.add_text(DocItemLabel.TEXT, "Page two text.")
+    doc.add_text(DocItemLabel.TEXT, marker)
+    doc.add_text(DocItemLabel.TEXT, "Page three text.")
+
+    normalized = normalizer.normalize(
+        doc, DocumentFormat.PDF, page_count_override=3, page_break_marker=marker
+    )
+
+    # Marker items produce no unit at all -- only the five real content
+    # items (title, 3 paragraphs, 1 heading) survive.
+    assert len(normalized.units) == 5
+    assert [u.text for u in normalized.units] == [
+        "Doc Title",
+        "Page one text.",
+        "Section Two",
+        "Page two text.",
+        "Page three text.",
+    ]
+
+    by_text = {u.text: u for u in normalized.units}
+    assert by_text["Doc Title"].page_start == 1
+    assert by_text["Doc Title"].page_end == 1
+    assert by_text["Page one text."].page_start == 1
+    assert by_text["Page one text."].page_end == 1
+    assert by_text["Section Two"].page_start == 2
+    assert by_text["Section Two"].page_end == 2
+    assert by_text["Page two text."].page_start == 2
+    assert by_text["Page two text."].page_end == 2
+    assert by_text["Page three text."].page_start == 3
+    assert by_text["Page three text."].page_end == 3

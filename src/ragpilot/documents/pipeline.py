@@ -59,10 +59,15 @@ def document_processor(ctx: ProcessorContext) -> ProcessingOutcome:
         if page_count > ctx.max_document_pages:
             return ProcessingOutcome(status=FileStatus.SKIPPED_LIMIT)
 
-    docling_doc = docling_adapter.convert(ctx.path)
-    normalized = normalizer.normalize(docling_doc, doc_format)
+    conversion = docling_adapter.convert(ctx.path, conn=ctx.conn)
+    normalized = normalizer.normalize(
+        conversion.document,
+        doc_format,
+        page_count_override=conversion.page_count,
+        page_break_marker=conversion.page_break_marker,
+    )
     chunks = chunker.chunk_document(normalized)
-    meta = extract_metadata(docling_doc, normalized, doc_format, ctx.path)
+    meta = extract_metadata(conversion.document, normalized, doc_format, ctx.path)
 
     now = _now()
     document_id = uuid.uuid4().hex
