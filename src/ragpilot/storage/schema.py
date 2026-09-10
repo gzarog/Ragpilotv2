@@ -266,3 +266,55 @@ KNOWLEDGE_DB_V4: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_cross_links_document ON cross_links(document_id)",
     "CREATE INDEX IF NOT EXISTS idx_cross_links_section ON cross_links(section_id)",
 )
+
+# Phase 9: local text-embedding vectors for real semantic search
+# (blueprint section 53), stored separately from and additive to
+# ``entities``/``documents``/``document_sections`` -- losing or clearing
+# this table can never corrupt or even touch those authoritative rows, it
+# only turns semantic search back into "unavailable" (see
+# retrieval/semantic.py's graceful degradation). No foreign key to either
+# source table: an embedding subject is one of two tables
+# (``core.models.EmbeddingSubjectType``), and SQLite has no cross-table
+# conditional FK -- ``file_id`` (present on both) is enough for the one
+# thing this table's own writer needs, deleting a stale generation
+# (``embeddings_repo.delete_by_file``, mirroring ``entities_repo``/
+# ``documents_repo``'s own delete_by_file).
+#
+# ``model_id``/``dim`` are stamped on every row, not stored once for the
+# whole table: if the configured embedding model ever changes,
+# similarity search (``retrieval/vectorstore.py``) simply filters rows to
+# the current ``model_id`` rather than ever mixing vectors from two
+# models in one comparison -- see retrieval/embedder.py's docstring for
+# why this is "exclude stale rows", not "auto re-embed the whole
+# project" (mirrors knowledge/linker.py's own "only files touched this
+# run" scoping tradeoff).
+#
+# Brute-force cosine similarity over these rows in application code
+# (retrieval/vectorstore.py), not a loadable SQLite extension like
+# sqlite-vec: Python's ``sqlite3`` module's ``enable_load_extension``
+# support is not guaranteed available/enabled on every platform/Python
+# build, exactly the kind of cross-platform risk this project has hit
+# before (see CHANGELOG's Phase 5-7 Windows/macOS-specific fixes) and
+# cannot verify here without a live multi-OS test -- a plain BLOB column
+# plus a linear scan is a legitimate, blueprint-sanctioned "equivalent
+# embedded index" at the scale a local per-project knowledge base
+# actually operates at.
+KNOWLEDGE_DB_V5: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS embeddings (
+        id TEXT PRIMARY KEY,
+        subject_type TEXT NOT NULL,
+        subject_id TEXT NOT NULL,
+        file_id TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        dim INTEGER NOT NULL,
+        vector BLOB NOT NULL,
+        generation INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        UNIQUE(subject_type, subject_id, model_id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_embeddings_file ON embeddings(file_id)",
+    "CREATE INDEX IF NOT EXISTS idx_embeddings_model ON embeddings(model_id)",
+)

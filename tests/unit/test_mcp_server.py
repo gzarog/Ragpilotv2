@@ -18,10 +18,11 @@ EXPECTED_TOOL_NAMES = {
     "ragpilot_impact",
     "ragpilot_documents",
     "ragpilot_status",
+    "ragpilot_ask",
 }
 
 
-def test_build_server_registers_all_eight_tools() -> None:
+def test_build_server_registers_all_nine_tools() -> None:
     server = build_server()
 
     tool_list = asyncio.run(server.list_tools())
@@ -51,3 +52,17 @@ def test_explore_is_marked_as_the_primary_tool_in_its_description() -> None:
 
     assert explore.description is not None
     assert "primary" in explore.description.lower()
+
+
+def test_ask_is_the_one_open_world_tool() -> None:
+    server = build_server()
+    tool_list = asyncio.run(server.list_tools())
+    by_name = {tool.name: tool for tool in tool_list}
+
+    assert by_name["ragpilot_ask"].annotations is not None
+    assert by_name["ragpilot_ask"].annotations.openWorldHint is True
+    for name, tool in by_name.items():
+        if name == "ragpilot_ask":
+            continue
+        assert tool.annotations is not None
+        assert tool.annotations.openWorldHint is False

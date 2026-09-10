@@ -64,7 +64,7 @@ def test_create_backup_includes_every_indexed_project(tmp_path: Path) -> None:
 
     archive_path, manifest = create_backup(home=home, sources=[source])
 
-    assert manifest.projects == {project_id: 4}
+    assert manifest.projects == {project_id: 5}
     assert manifest.sources[0]["id"] == "src_test"
     assert manifest.sources[0]["project_id"] == project_id
 
@@ -75,7 +75,7 @@ def test_create_backup_includes_every_indexed_project(tmp_path: Path) -> None:
         manifest_member = tar.extractfile("./manifest.json")
         assert manifest_member is not None
         on_disk_manifest = json.loads(manifest_member.read())
-    assert on_disk_manifest["projects"] == {project_id: 4}
+    assert on_disk_manifest["projects"] == {project_id: 5}
 
 
 def test_create_backup_default_destination_lives_under_backups_dir(tmp_path: Path) -> None:

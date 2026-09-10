@@ -603,3 +603,171 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     wrapper per command) so it is unit-testable without going through
     Typer -- mirroring how `indexing/runner.py` already sits underneath
     both `cli/index.py` and the Phase 7 daemon.
+
+- Phase 9: Optional Intelligence (the blueprint's final phase). Everything
+  here is opt-in and never required for `explore`/`search`/`impact`/
+  `symbol`/`callers`/`callees`/`docs` to keep working exactly as before --
+  `search.semantic` still defaults `false` and no AI provider is
+  configured by default, so the full Phase 1-8 test suite passes
+  unmodified with this phase's code present but switched off.
+  - **Local embeddings** (`retrieval/embedder.py`): real, local (offline
+    at inference once weights are cached) sentence embeddings via
+    `sentence-transformers/all-MiniLM-L6-v2`, called directly through
+    `transformers`' `AutoTokenizer`/`AutoModel` (hand-rolled mean-pooling
+    + L2 normalization) rather than adding the `sentence-transformers`
+    package on top. Both `torch` and `transformers` are already required,
+    non-optional dependencies via Docling's own PDF pipeline; for one
+    fixed model, everything `sentence-transformers` adds is ~15 lines
+    here, whereas the package itself would pull in its own dependency
+    tree (scikit-learn/scipy/Pillow/tqdm) for no benefit this project
+    needs -- the same "biggest transitive win, smallest add-on" call
+    Phase 3 made for Docling's own OCR/VLM extras. `EMBEDDING_MODEL_ID`/
+    `EMBEDDING_DIM` are stamped onto every stored row (see below): if the
+    configured model ever changes, similarity search filters to the
+    current `model_id` rather than ever mixing vectors from two models in
+    one comparison -- a since-changed model's rows are simply excluded,
+    not auto-re-embedded project-wide (see the indexing note below for
+    why). A model that fails to load (no network on first use, no cached
+    weights, `torch`/`transformers` missing) raises a specific
+    `EmbeddingModelUnavailableError` that every caller catches to degrade
+    to "semantic search unavailable" rather than crashing.
+  - **Vector storage** (`storage/repositories/embeddings_repo.py` +
+    `storage/schema.py`'s additive `KNOWLEDGE_DB_V5`/migration 5): a new
+    `embeddings` table (subject type/id, file id, model id, dimension, a
+    packed little-endian float32 BLOB vector), stored separately from and
+    additive to `entities`/`documents`/`document_sections` -- losing or
+    clearing this table can never touch those authoritative rows, only
+    semantic search's own availability. Chose plain BLOB storage plus
+    brute-force cosine similarity in application code
+    (`retrieval/vectorstore.py`, pure Python, no new dependency) over a
+    loadable SQLite extension like sqlite-vec: Python's `sqlite3`
+    module's `enable_load_extension` support is not guaranteed
+    available/enabled on every platform/Python build, exactly the class
+    of cross-platform SQLite risk this project has already been burned by
+    in Phases 5-7 (see this file's own Windows/macOS-specific fixes
+    below), and there was no live multi-OS test available here to verify
+    it either way. A linear scan is entirely adequate at the scale a
+    local per-project knowledge base actually holds -- a legitimate,
+    blueprint-sanctioned "equivalent embedded index", not a corner cut.
+  - **Wired into retrieval** (`retrieval/semantic.py`, now a real
+    implementation of Phase 5's pre-wired seam): embeds the query with
+    the same model used to embed indexed content, scores it against every
+    current-model embedding via `vectorstore.top_k`, and returns
+    `SemanticHit`s in a shape deliberately close to `retrieval/
+    lexical.py`'s `SearchResult` (same `kind`/`id`/`title`/`path`/
+    `source_id`/`snippet`/`location`, plus a `score` the lexical shape has
+    no equivalent of) so they merge cleanly into the same evidence
+    pipeline without becoming a parallel, incompatible result type.
+    `retrieval/planner.py`'s already-existing `Strategy.SEMANTIC` hook
+    (added in Phase 5, never previously acted on) is now actually
+    consumed by `cli/explore.py`'s `_run`, and `cli/search.py` surfaces
+    semantic hits as their own distinct section/JSON key, never merged
+    into the lexical ranked list. Per the blueprint (sections 19/57):
+    semantic hits are folded into evidence at `Confidence.HEURISTIC` --
+    the ladder's existing lowest tier, never EXACT/HIGH/MEDIUM -- so
+    similarity can only ever *suggest*, never silently mint or upgrade a
+    high-confidence fact. `ragpilot index`'s per-file processing computes
+    embeddings for touched files only, gated entirely behind
+    `search.semantic` (`indexing/embedding_indexer.py`, wired into
+    `indexing/runner.py` right after the existing cross-domain-linking
+    pass) -- enabling that one config value is what turns on both
+    computing and using embeddings, and disabling it means `torch`/
+    `transformers` are never even imported. Mirrors `knowledge/
+    linker.py`'s own "touched files only" scoping and its documented
+    tradeoff: freshly enabling `search.semantic` on an already-indexed,
+    otherwise-unchanged project computes no embeddings until something
+    touches those files again -- `ragpilot rebuild` (every file becomes
+    "new") is the documented way to force a full backfill. Every
+    `explore`/`search` query still works, unchanged, with
+    `search.semantic` left at its default `false`, and degrades
+    gracefully (never errors) if it is enabled but nothing has been
+    embedded yet, embeddings were cleared, or the model can't load.
+  - **Reranking**: no separate `retrieval/reranker.py` module. Ranking
+    and merging already live in `retrieval/lexical.py`'s existing
+    `RankTier` system (a deliberate Phase 5 decision, documented in that
+    module's own docstring, to keep exactly one signal-to-tier mapping
+    and one merge step); semantic results now participate in the overall
+    retrieval picture through `cli/explore.py`'s evidence assembly and
+    `cli/search.py`'s own distinct section rather than a second merge
+    step reranking lexical and semantic hits together. Scoped down
+    deliberately (Priority 3) rather than building a half-finished
+    separate module.
+  - **LLM provider abstraction** (`src/ragpilot/ai/`): `base.py` defines
+    a small, provider-agnostic interface (`AiProvider.answer(AiRequest)
+    -> AiAnswer`) plus one shared evidence-prompt builder every provider
+    reuses -- a consumer of the evidence Phase 5's context builder
+    already assembles, never a second knowledge-model owner, per the
+    blueprint's own framing. Four real providers: `openai.py`/
+    `anthropic.py` (the official `openai`/`anthropic` PyPI packages,
+    pinned to each SDK's well-documented, `httpx`-based major --
+    `openai>=1.0,<2`/`anthropic>=0.25,<1` -- rather than a much newer
+    major this index also serves that vendors its own forked HTTP client
+    internally, which would have undermined the mock-`httpx.Client`
+    testing approach below), `ollama.py` (local HTTP API via `httpx`
+    directly against `http://localhost:11434` by default, no dedicated
+    SDK package exists for it), and `openai_compatible.py` (any
+    self-hosted/third-party OpenAI-compatible endpoint, reusing the
+    `openai` SDK itself pointed at a configurable `base_url`). A new
+    `ai:` config section (`provider`/`model`/`base_url`/
+    `timeout_seconds`) follows `core/config.py`'s existing layered-config
+    conventions; API keys are read from environment variables
+    (`OPENAI_API_KEY`/`ANTHROPIC_API_KEY`/`RAGPILOT_AI_API_KEY` for
+    `openai_compatible`) rather than stored in `config.yaml`/
+    `.ragpilot.yaml`, both plain unencrypted files -- acceptable for CI
+    per the blueprint; OS-credential-store integration (Credential
+    Manager/Keychain/Secret Service) is a documented, deliberate gap, a
+    larger separate undertaking outside this phase's scope.
+  - **`privacy.external_ai_allowed` gating**: OpenAI/Anthropic/an
+    arbitrary OpenAI-compatible endpoint always refuse with a clear
+    `AiPrivacyBlockedError` unless this already-existing flag (defaults
+    `false`) is explicitly `true`. Ollama is exempt from the flag *only*
+    when its configured host actually resolves to loopback
+    (`localhost`/`127.0.0.1`/`::1`) -- a request that never leaves the
+    machine is not "external AI" in the sense the flag exists to gate,
+    applying the blueprint's local-first framing literally. A non-default,
+    remote Ollama `base_url` is **not** exempt: it is real network egress
+    to a third party, no different in kind from the other three
+    providers, so it is gated identically rather than inheriting Ollama's
+    usual local-first pass -- a deliberate, narrower reading documented in
+    `ai/factory.py` rather than left as an unstated assumption.
+  - **`ragpilot ask "QUESTION" [--json]`**: orchestrates the exact same
+    deterministic retrieval `ragpilot explore` uses (`retrieval/
+    planner.py` + `cli/explore.py`'s own `_run`, not a second retrieval
+    implementation) to assemble an evidence package, then hands the
+    question and that evidence to the configured `ai:` provider for a
+    synthesized answer, returned alongside the evidence it was based on
+    so the answer stays auditable against real, already-indexed sources.
+    Fails with a clear, actionable error -- never a silent no-op, never an
+    unhandled traceback -- mapped onto `core/errors.py`'s existing exit
+    codes: no provider configured (`AiNotConfiguredError`, reuses
+    `ConfigError`'s exit code 3), the privacy gate blocks a cloud provider
+    (`AiPrivacyBlockedError`, reuses `SecurityViolationError`'s exit code
+    8), or the provider call itself fails -- network error, bad API key,
+    non-2xx response (`AiProviderError`, exit code 1, the same generic-
+    failure code any other unclassified CLI-boundary exception already
+    gets). A new `ragpilot_ask` MCP tool (`mcp/tools.py`/`schemas.py`,
+    following Phase 6's exact pattern) exposes the same command to an MCP
+    client, registered with distinct (`openWorldHint=True`) annotations
+    and its own instructions text since -- unlike the other 8 read-only,
+    network-free tools -- it can reach a real, possibly cloud, endpoint.
+  - **Testing**: zero real network calls in the default test suite for
+    any AI provider -- every provider is proven with a dependency-injected
+    `httpx.Client(transport=httpx.MockTransport(...))` covering success,
+    an API error response, and a network failure, plus `ai/factory.py`'s
+    privacy-gating logic (including the Ollama loopback-vs-remote
+    distinction) proven without constructing a real HTTP client at all.
+    A real local embedding model load is a genuine, first-run network
+    dependency (Hugging Face weight download) exactly like Phase 3's
+    Docling PDF pipeline, so it gets the identical treatment: a new
+    `embedding_model` pytest marker, excluded from the default run
+    (`pyproject.toml`'s `addopts`), confirmed by actually running
+    `pytest -m embedding_model -q` (both real-model tests pass: correctly
+    normalized 384-dim vectors, and semantically related sentences score
+    higher cosine similarity than unrelated ones), plus a matching
+    non-blocking `embedding-model-tests` CI job mirroring
+    `docling-pdf-tests` exactly. Every other Phase 9 test -- vector
+    storage/cosine similarity, the `embeddings` repository, semantic
+    search's degrade-gracefully paths, and full `ragpilot index`/
+    `search`/`explore`/`ask` integration coverage -- runs in the default
+    suite using precomputed/fake vectors and a monkeypatched
+    `embedder.embed_texts`, never the real model.

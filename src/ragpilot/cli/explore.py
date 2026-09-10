@@ -21,7 +21,7 @@ from ragpilot.core.lifecycle import AppContext
 from ragpilot.core.models import Confidence, RelationshipType
 from ragpilot.knowledge import evidence as evidence_mod
 from ragpilot.knowledge.evidence import Evidence, EvidenceLocation
-from ragpilot.retrieval import context_builder, lexical, planner
+from ragpilot.retrieval import context_builder, lexical, planner, semantic
 from ragpilot.retrieval import graph as retrieval_graph
 from ragpilot.storage.repositories import documents_repo, files_repo, links_repo
 
@@ -59,6 +59,34 @@ def _lexical_evidence(result: lexical.SearchResult) -> context_builder.EvidenceI
         confidence=_TIER_CONFIDENCE.get(result.tier, Confidence.HEURISTIC),
     )
     return context_builder.EvidenceItem(evidence=evidence, snippet=result.snippet or "")
+
+
+def _semantic_evidence(hit: semantic.SemanticHit) -> context_builder.EvidenceItem:
+    """Always ``Confidence.HEURISTIC`` -- the ladder's lowest tier, never
+    EXACT/HIGH/MEDIUM (blueprint sections 19/57: semantic similarity may
+    only ever *suggest* evidence, never mint or upgrade a high-confidence
+    fact). ``HEURISTIC`` already carries exactly that "not a language
+    fact, not an identifier match, a naming-convention-strength guess"
+    meaning for ``knowledge/linker.py``'s route heuristic -- a semantic
+    similarity hit is weaker evidence still, but reusing the ladder's
+    existing floor rather than inventing a lower tier keeps confidence
+    comparisons (``knowledge/confidence.py``) meaningful project-wide.
+    """
+    loc = hit.location or {}
+    evidence = Evidence(
+        source=f"semantic:{hit.kind}",
+        path=hit.path,
+        location=EvidenceLocation(
+            line_start=loc.get("line_start"),
+            line_end=loc.get("line_end"),
+            page=loc.get("page"),
+            section=loc.get("section"),
+        ),
+        entity=hit.title,
+        relationship="similar_to",
+        confidence=Confidence.HEURISTIC,
+    )
+    return context_builder.EvidenceItem(evidence=evidence, snippet=hit.snippet)
 
 
 def _edge_evidence(edge: retrieval_graph.ResolvedEdge) -> context_builder.EvidenceItem | None:
@@ -157,6 +185,16 @@ def _run(ctx: AppContext, query_plan: planner.QueryPlan) -> dict[str, Any]:
     doc_link_evidence = _document_links(ctx, symbol_matches, strategies)
     symbol_display = symbol_matches[0].entity.qualified_name if symbol_matches else symbol_query
 
+    # Only run (and only imports torch/transformers, see
+    # retrieval/embedder.py) when the planner actually added
+    # Strategy.SEMANTIC, which itself only happens when search.semantic
+    # is on (planner.py) -- the default, disabled path never touches this.
+    semantic_result = (
+        semantic.semantic_search(ctx, query_plan.query, config=ctx.config.search)
+        if planner.Strategy.SEMANTIC in strategies
+        else None
+    )
+
     items: list[context_builder.EvidenceItem] = []
     graph_paths: list[context_builder.GraphPath] = []
     for edge in callers:
@@ -173,6 +211,8 @@ def _run(ctx: AppContext, query_plan: planner.QueryPlan) -> dict[str, Any]:
         items.append(context_builder.EvidenceItem(evidence=ev, snippet=ev.entity))
     if not symbol_matches:
         items.extend(_lexical_evidence(r) for r in lexical_results if r.snippet)
+    if semantic_result is not None:
+        items.extend(_semantic_evidence(h) for h in semantic_result.results)
 
     context_result = context_builder.build_context(items, graph_paths, budget=ctx.config.context)
 
@@ -219,6 +259,17 @@ def _run(ctx: AppContext, query_plan: planner.QueryPlan) -> dict[str, Any]:
         "evidence": context_result.evidence,
         "evidence_truncated": context_result.truncated,
         "evidence_truncation_reasons": context_result.truncation_reasons,
+        # Surfaced as its own list, distinct from "documents"/"evidence"
+        # above, so a caller can tell a similarity-ranked suggestion
+        # apart from a lexical/graph match without inspecting each
+        # evidence item's "source" string -- also folded into "evidence"
+        # (at Confidence.HEURISTIC, see _semantic_evidence) for anything
+        # that budgets/renders evidence uniformly.
+        "semantic_results": (
+            [h.to_dict() for h in semantic_result.results] if semantic_result is not None else []
+        ),
+        "semantic_available": semantic_result.available if semantic_result is not None else None,
+        "semantic_reason": semantic_result.reason if semantic_result is not None else None,
     }
 
 
@@ -243,6 +294,13 @@ def _render(result: dict[str, Any]) -> None:
     _print_list("Tests", result["tests"])
     _print_list("Requirements", result["requirements"])
     _print_list("Incidents", result["incidents"])
+    if result["semantic_results"]:
+        _print_list(
+            "Semantic matches",
+            [f"{r['title']} ({r['score']:.3f})" for r in result["semantic_results"]],
+        )
+    elif result["semantic_available"] is False:
+        console.print(f"[dim]Semantic search unavailable: {result['semantic_reason']}[/dim]")
     truncated = " (truncated)" if result["evidence_truncated"] else ""
     console.print(f"[bold]Evidence[/bold]: {len(result['evidence'])} item(s){truncated}")
 

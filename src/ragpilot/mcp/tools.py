@@ -33,6 +33,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
 
+from ragpilot.cli import ask as ask_cli
 from ragpilot.cli import docs as docs_cli
 from ragpilot.cli import explore as explore_cli
 from ragpilot.cli import impact as impact_cli
@@ -53,6 +54,8 @@ from ragpilot.retrieval import lexical, planner
 
 from . import schemas
 from .schemas import (
+    AskInput,
+    AskOutput,
     DocumentsInput,
     DocumentsOutput,
     ExploreInput,
@@ -313,7 +316,39 @@ async def ragpilot_status() -> StatusOutput:
     return await _call(StatusOutput, lambda ctx: _status_work(ctx, StatusInput()))
 
 
+# -- ragpilot_ask -------------------------------------------------------
+
+
+def _ask_work(ctx: AppContext, input_: AskInput) -> dict[str, Any]:
+    question = _require(input_.question, "question")
+    result = ask_cli._run(ctx, question)
+    warnings: list[str] = []
+    if result["evidence_truncated"]:
+        warnings.extend(result["evidence_truncation_reasons"])
+    return {
+        "question": result["question"],
+        "answer": result["answer"],
+        "evidence": result["evidence"],
+        "warnings": warnings,
+    }
+
+
+async def ragpilot_ask(question: str) -> AskOutput:
+    """Ask a question answered by the configured ``ai:`` provider,
+    grounded in the exact same evidence ``ragpilot_explore`` would
+    return. Unlike every other tool here, this one is not read-only/
+    network-free: it calls out to the configured provider (subject to
+    ``privacy.external_ai_allowed`` exactly like ``ragpilot ask``) and
+    fails with a typed error (``AiNotConfiguredError``/
+    ``AiPrivacyBlockedError``/``AiProviderError``) if no provider is
+    configured, the privacy gate blocks it, or the provider call fails.
+    """
+    input_ = AskInput(question=question)
+    return await _call(AskOutput, lambda ctx: _ask_work(ctx, input_))
+
+
 __all__ = [
+    "ragpilot_ask",
     "ragpilot_callees",
     "ragpilot_callers",
     "ragpilot_documents",

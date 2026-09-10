@@ -283,3 +283,36 @@ class TotalsSummary(BaseModel):
 class StatusOutput(BaseToolOutput):
     sources: list[SourceStatus] = Field(default_factory=list)
     totals: TotalsSummary | None = None
+
+
+# -- ragpilot_ask -------------------------------------------------------
+
+
+class AskInput(BaseModel):
+    question: str
+
+
+class AiUsageOut(BaseModel):
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
+
+class AiAnswerOut(BaseModel):
+    text: str
+    provider: str
+    model: str
+    usage: AiUsageOut
+
+
+class AskOutput(BaseToolOutput):
+    """Not read-only and not network-free like the other 8 tools (see
+    ``mcp/server.py``'s per-tool annotations/instructions) -- calling this
+    tool reaches the configured ``ai:`` provider, which may be a real
+    cloud/network endpoint gated by ``privacy.external_ai_allowed``
+    exactly like ``ragpilot ask`` itself.
+    """
+
+    question: str | None = None
+    answer: AiAnswerOut | None = None
+    evidence: list[EvidenceRef] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)

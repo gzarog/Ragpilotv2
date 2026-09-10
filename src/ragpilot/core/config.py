@@ -91,6 +91,25 @@ class PrivacyConfig(BaseModel):
     external_ai_allowed: bool = False
 
 
+class AiConfig(BaseModel):
+    """Phase 9's ``ragpilot ask`` provider selection. ``provider="none"``
+    (the default) means no provider is configured at all -- ``ragpilot
+    ask`` fails with a clear ``ConfigError`` rather than guessing one, the
+    same "explicit opt-in, no default guess" stance ``search.semantic``
+    takes for embeddings. API keys are never stored here: they are read
+    from environment variables at call time (``OPENAI_API_KEY``,
+    ``ANTHROPIC_API_KEY``, see ``ai/factory.py``) -- acceptable for CI per
+    the blueprint, and it keeps a credential out of ``config.yaml``/
+    ``.ragpilot.yaml``, both of which are plain, unencrypted files a
+    backup/restore or a careless ``git add`` could otherwise leak.
+    """
+
+    provider: str = "none"  # "none" | "openai" | "anthropic" | "ollama" | "openai_compatible"
+    model: str = ""
+    base_url: str | None = None
+    timeout_seconds: float = 60.0
+
+
 class TelemetryConfig(BaseModel):
     anonymous_usage: bool = False
 
@@ -107,6 +126,7 @@ class RagpilotConfig(BaseModel):
     api: ApiConfig = Field(default_factory=ApiConfig)
     privacy: PrivacyConfig = Field(default_factory=PrivacyConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
+    ai: AiConfig = Field(default_factory=AiConfig)
 
 
 _KNOWN_SECTIONS = {
@@ -121,6 +141,7 @@ _KNOWN_SECTIONS = {
     "api",
     "privacy",
     "telemetry",
+    "ai",
 }
 
 

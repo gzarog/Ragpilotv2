@@ -5,6 +5,7 @@ from __future__ import annotations
 import typer
 
 from ragpilot.cli import (
+    ask,
     backup,
     callees,
     callers,
@@ -75,6 +76,9 @@ app.command("rebuild", help="Wipe and re-index one or every source's derived kno
 )
 app.command("upgrade", help="Apply pending schema migrations, backing up first if needed.")(
     upgrade.upgrade
+)
+app.command("ask", help="Ask a question, answered by an AI provider grounded in real evidence.")(
+    ask.ask
 )
 
 

@@ -24,18 +24,33 @@ INSTRUCTIONS = (
     "RAGpilot exposes code and document knowledge already indexed locally "
     "on this machine (see `ragpilot index`). Start with ragpilot_explore "
     "for a natural-language or identifier query -- it is the primary tool "
-    "and runs RAGpilot's deterministic query planner. The other tools "
-    "(ragpilot_search/symbol/callers/callees/impact/documents/status) are "
-    "narrower, single-purpose lookups. Every tool is read-only, returns a "
-    "bounded, versioned JSON result (schema_version/ok/error), and never "
-    "calls an LLM or the network -- results are retrieved/structured data "
-    "for the calling agent to reason over."
+    "and runs RAGpilot's deterministic query planner. The other read-only "
+    "tools (ragpilot_search/symbol/callers/callees/impact/documents/status) "
+    "are narrower, single-purpose lookups; all 8 of them return a bounded, "
+    "versioned JSON result (schema_version/ok/error) and never call an LLM "
+    "or the network -- results are retrieved/structured data for the "
+    "calling agent to reason over. ragpilot_ask is the one exception: it "
+    "calls the locally configured `ai:` provider (which may be a real "
+    "cloud endpoint, gated by privacy.external_ai_allowed) to synthesize "
+    "an answer over the same evidence ragpilot_explore would return -- "
+    "prefer ragpilot_explore when the calling agent can reason over "
+    "evidence itself; use ragpilot_ask only when a synthesized natural-"
+    "language answer is specifically wanted."
 )
 
-# All 8 tools only read the local index -- never write, never touch the
-# network -- so one shared annotation set covers every registration below.
+# The 8 retrieval-only tools only read the local index -- never write,
+# never touch the network -- so one shared annotation set covers every
+# registration below except ragpilot_ask.
 _READ_ONLY = ToolAnnotations(
     readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
+)
+
+# ragpilot_ask calls out to whatever ``ai:`` provider is configured,
+# which may be a real network endpoint -- the opposite of every other
+# tool's openWorldHint=False, and not idempotent in the sense an LLM
+# response is not guaranteed identical across calls.
+_ASK_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=True, destructiveHint=False, idempotentHint=False, openWorldHint=True
 )
 
 _TOOLS: tuple[tuple[str, str], ...] = (
@@ -56,9 +71,18 @@ _TOOLS: tuple[tuple[str, str], ...] = (
     ("ragpilot_status", "Indexing status: sources, per-status file counts, queue depth."),
 )
 
+# Registered separately from _TOOLS above since it takes _ASK_ANNOTATIONS,
+# not _READ_ONLY -- see that annotation's own comment.
+_ASK_TOOL = (
+    "ragpilot_ask",
+    "Ask a natural-language question, answered by the configured AI provider "
+    "grounded in the same evidence ragpilot_explore would return. Calls out to "
+    "a real (possibly cloud) AI provider -- unlike every other tool here.",
+)
+
 
 def build_server() -> FastMCP:
-    """Constructs the FastMCP server and registers all 8 tools. Pure and
+    """Constructs the FastMCP server and registers all 9 tools. Pure and
     side-effect free (no stdio, no sockets) so tests can call it directly.
     """
     server = FastMCP(name=f"ragpilot v{__version__}", instructions=INSTRUCTIONS)
@@ -69,6 +93,13 @@ def build_server() -> FastMCP:
             description=description,
             annotations=_READ_ONLY,
         )
+    ask_name, ask_description = _ASK_TOOL
+    server.add_tool(
+        getattr(tools, ask_name),
+        name=ask_name,
+        description=ask_description,
+        annotations=_ASK_ANNOTATIONS,
+    )
     return server
 
 

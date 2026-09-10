@@ -24,6 +24,7 @@ from ragpilot.indexing.coordinator import (
     ProcessorRegistry,
     default_registry,
 )
+from ragpilot.indexing.embedding_indexer import embed_touched_files
 from ragpilot.knowledge.linker import link_touched_files
 from ragpilot.storage.repositories import sources_repo
 from ragpilot.storage.sqlite import transaction
@@ -48,6 +49,10 @@ class SourcePassResult:
     source: Source
     result: IndexRunResult
     linked: int
+    # Phase 9: vectors computed this pass -- always 0 when
+    # ``search.semantic`` is off (the default), matching ``linked`` above
+    # for a source with nothing touched. See ``indexing/embedding_indexer.py``.
+    embedded: int
     # True only on the run that *changes* status -- lets a caller (CLI
     # print, daemon log line) announce a transition once rather than on
     # every steady-state ACTIVE/ACTIVE or OFFLINE/OFFLINE pass.
@@ -86,6 +91,7 @@ def run_source_pass(
             source=source,
             result=result,
             linked=0,
+            embedded=0,
             became_offline=became_offline,
             became_online=False,
         )
@@ -108,6 +114,25 @@ def run_source_pass(
                 touched_document_file_ids=result.touched_document_file_ids,
             )
 
+    # Phase 9: same touched-files scoping and same "run after the queue
+    # has drained" placement as the linking pass above, gated behind
+    # ``search.semantic`` so a project that never turns it on pays
+    # nothing extra here. ``retrieval/embedder.py`` only imports
+    # ``torch``/``transformers`` lazily, inside the function this branch
+    # is the sole caller of, so leaving ``search.semantic`` off also means
+    # those heavy libraries are never actually loaded into the process.
+    embedded = 0
+    if ctx.config.search.semantic and (
+        result.touched_code_file_ids or result.touched_document_file_ids
+    ):
+        with transaction(conn):
+            embedded = embed_touched_files(
+                conn,
+                source_id=source.id,
+                touched_code_file_ids=result.touched_code_file_ids,
+                touched_document_file_ids=result.touched_document_file_ids,
+            )
+
     sources_repo.update_scan_result(
         ctx.sources_conn,
         source.id,
@@ -120,6 +145,7 @@ def run_source_pass(
         source=source,
         result=result,
         linked=linked,
+        embedded=embedded,
         became_offline=False,
         became_online=became_online,
     )

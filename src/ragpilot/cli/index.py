@@ -58,7 +58,8 @@ def index(
                     f"scanned={result.scanned} new={result.new} changed={result.changed} "
                     f"unchanged={result.unchanged} deleted={result.deleted} "
                     f"indexed={result.indexed} skipped={result.skipped_limit} "
-                    f"failed={result.failed} linked={pass_result.linked}"
+                    f"failed={result.failed} linked={pass_result.linked} "
+                    f"embedded={pass_result.embedded}"
                 )
 
             if total_failed:

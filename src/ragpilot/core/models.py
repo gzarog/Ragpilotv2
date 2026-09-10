@@ -276,6 +276,20 @@ class SectionKind(StrEnum):
     TABLE = "table"
 
 
+class EmbeddingSubjectType(StrEnum):
+    """Discriminator for a row in ``embeddings`` (Phase 9): which
+    already-stored, authoritative row a vector was computed from -- a
+    code ``entities`` row or a ``document_sections`` row. Mirrors
+    ``SectionKind``'s role for ``document_sections`` itself; kept as its
+    own enum rather than reusing ``EntityType``/``SectionKind`` since an
+    embedding subject is one of exactly two *kinds of table*, not one of
+    either table's own finer-grained kind column.
+    """
+
+    ENTITY = "entity"
+    DOCUMENT_SECTION = "document_section"
+
+
 class Document(BaseModel):
     """One row per successfully converted document file, mirroring how
     ``FileRecord`` anchors a code file -- ``Entity``/``Section`` rows are
