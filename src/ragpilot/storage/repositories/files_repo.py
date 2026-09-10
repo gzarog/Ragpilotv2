@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 
 from ragpilot.core.models import FileKind, FileRecord, FileStatus
+from ragpilot.storage.repositories import links_repo
 from ragpilot.storage.sqlite import transaction
 
 
@@ -125,18 +126,22 @@ def mark_failed(conn: sqlite3.Connection, file_id: str, *, error: str, updated_a
 def delete(conn: sqlite3.Connection, file_id: str) -> None:
     """Deletes a file and cascades its derived-content rows.
 
-    ``entities``/``relationships`` (Phase 2) and ``documents``/
-    ``document_sections`` (Phase 3) all carry a ``file_id`` foreign key
-    into ``files``, but were added by later, already-applied migrations
-    without an ``ON DELETE CASCADE`` clause -- so with ``PRAGMA
-    foreign_keys = ON`` (storage/sqlite.py), deleting a ``files`` row with
-    surviving derived rows would raise ``IntegrityError`` instead of
-    reconciling a source's deleted file away. Clearing them here, in the
-    same transaction, keeps that reconciliation crash-free without
-    touching those migrations.
+    ``entities``/``relationships`` (Phase 2), ``documents``/
+    ``document_sections`` (Phase 3) and ``cross_links`` (Phase 4) all
+    carry a ``file_id`` foreign key into ``files`` (``cross_links``
+    indirectly, via ``entities``/``documents``), but were added by later,
+    already-applied migrations without an ``ON DELETE CASCADE`` clause --
+    so with ``PRAGMA foreign_keys = ON`` (storage/sqlite.py), deleting a
+    ``files`` row with surviving derived rows would raise
+    ``IntegrityError`` instead of reconciling a source's deleted file
+    away. Clearing them here, in the same transaction (``cross_links``
+    first, since it references ``entities``/``documents``), keeps that
+    reconciliation crash-free without touching those migrations.
     """
     with transaction(conn):
         conn.execute("DELETE FROM index_jobs WHERE file_id = ?", (file_id,))
+        links_repo.delete_by_entity_file(conn, file_id)
+        links_repo.delete_by_document_file(conn, file_id)
         conn.execute(
             "DELETE FROM code_fts WHERE entity_id IN "
             "(SELECT id FROM entities WHERE file_id = ?)",

@@ -148,3 +148,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     OpenDocument, EPUB, advanced VLM pipelines, cross-domain (code <->
     document) linking, `ragpilot search`/`explore`, and any daemon/watcher
     integration.
+
+- Phase 4: Unified Knowledge Model.
+  - `knowledge/linker.py`: a cross-domain linker connecting code entities to
+    the documents that describe them (blueprint section 19). Implements the
+    blueprint's priority list to the extent Phases 1-3 actually give it
+    signal to work with: exact bare-identifier matching, qualified
+    (fully-dotted) identifier matching (scored at least as strong as bare
+    matching, per the blueprint), filename matching, a modest class-only
+    alias of a qualified name, and route/method matching that reuses Phase
+    2's existing `framework_rules.py`-tagged HTTP endpoint findings rather
+    than building any new route/message-broker infrastructure. Explicit,
+    user-defined mappings (`ragpilot link add`) are the highest-trust
+    source and are never written, overridden, or contradicted by the
+    automated linker (different `resolver` values, proven by a dedicated
+    test). Semantic/embedding-based linking is explicitly out of scope
+    here, per the blueprint ("semantic similarity may suggest links but
+    must not silently create high-confidence facts") -- Phase 4 has no
+    embedding infrastructure to do so anyway (that's Phase 9).
+  - Confidence ladder (`knowledge/confidence.py`, re-exporting Phase 2's
+    `Confidence` enum rather than duplicating it): explicit user mappings =
+    EXACT; exact/qualified identifier matches = HIGH; filename/alias
+    matches = MEDIUM; route-heuristic matches = HEURISTIC -- the same
+    tiers Phase 2's `code/resolver.py` already established, documented in
+    the same comment style.
+  - `knowledge/entities.py`: a thin query facade unifying "look up an
+    entity by id or canonical/qualified name" across code entities and
+    documents, wrapping `entities_repo`/`documents_repo`/`files_repo`
+    rather than adding a new persistence layer.
+  - `knowledge/evidence.py`: normalizes a code relationship or a
+    cross-domain link into the blueprint's evidence contract (section 57)
+    -- `{source, path, location: {line_start, line_end, page, section},
+    entity, relationship, confidence}` -- computed at read time from
+    existing Phase 2/3 storage rather than materializing a separate
+    `evidence` table (see "Storage design" below).
+  - Storage: a new additive migration (`storage/schema.py`
+    `KNOWLEDGE_DB_V4`, `cross_links` table) rather than reusing Phase 2's
+    `relationships` table directly -- `relationships.target_entity_id` is
+    a foreign key into `entities(id)` only, and a document is not an
+    entity row, so a document-side link needs its own table
+    (`entity_id`/`document_id`/optional `section_id`, `resolver`,
+    `confidence`, `evidence`). No separate `evidence` table: evidence is
+    derived at read time (`knowledge/evidence.py`) from
+    `entities`/`relationships`/`documents`/`document_sections`/
+    `cross_links`, which is simpler and has no known performance need yet
+    to justify materializing it.
+  - The cross-domain linking pass runs as part of `ragpilot index`
+    (`cli/index.py`), after each source's per-file processor queue has
+    fully drained -- a link needs both a code entity and a document to
+    exist, so it cannot be computed per-file the way Phase 2/3's atomic
+    generational writes are. It is incremental: only entities/documents
+    belonging to files (re)indexed *this run* are matched, searched
+    against the full existing project corpus in both directions (a new
+    document against all existing code, and vice versa) -- a full-corpus
+    recompute on every run does not scale. Stale links are cleaned up via
+    the same generational-deletion pattern Phase 1-3 already use:
+    `entities_repo.delete_by_file`/`documents_repo.delete_by_file` (and
+    `files_repo.delete`) now cascade into the new `links_repo`, so a link
+    pinned to a file's previous generation (including an explicit,
+    user-defined one) is removed when that file is re-indexed with
+    different content or deleted -- see `links_repo.py`'s docstrings for
+    why that is unavoidable given Phase 2 entities have no identity stable
+    across a content-changing regeneration.
+  - Read/write CLI `ragpilot link add ENTITY DOCUMENT [--section ID]`,
+    `ragpilot link remove ID`, `ragpilot link list [--entity NAME]
+    [--document ID] [--json]`, following Phase 1-3's `--json` envelope and
+    exit-code conventions. Deliberately minimal (per the blueprint, full
+    `explore`/`impact` presentation is Phase 5's job): enough to inspect
+    the link graph and manually correct it.
+  - **Known limitations**: matching is exact/substring-based (with word-
+    boundary checks) over `document_sections` text -- no fuzzy or semantic
+    matching, and a common short identifier can produce a noisy bare-name
+    match (no suppression heuristic beyond boundary-checking is applied).
+    An explicit link pinned to a code entity only survives re-indexing
+    while that entity's *file* is unchanged (classified `UNCHANGED` and
+    never reprocessed) -- Phase 2 entity ids are not stable across a
+    content-changing regeneration of their file, so a link pinned to one
+    is cleaned up along with it, the same as an auto-discovered link
+    would be. Cross-domain linking is scoped to one project (one
+    source's `knowledge.db`) at a time; it does not link across two
+    different registered sources.

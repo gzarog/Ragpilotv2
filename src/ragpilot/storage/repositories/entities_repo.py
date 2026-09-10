@@ -11,6 +11,7 @@ from __future__ import annotations
 import sqlite3
 
 from ragpilot.core.models import Entity, EntityType
+from ragpilot.storage.repositories import links_repo
 
 
 def _row_to_entity(row: sqlite3.Row) -> Entity:
@@ -41,6 +42,7 @@ def delete_by_file(conn: sqlite3.Connection, file_id: str) -> None:
     ``with transaction(conn):`` block as the subsequent inserts so a reader
     never observes a file with zero or partial entities mid-reindex.
     """
+    links_repo.delete_by_entity_file(conn, file_id)
     conn.execute(
         "DELETE FROM code_fts WHERE entity_id IN (SELECT id FROM entities WHERE file_id = ?)",
         (file_id,),
@@ -86,6 +88,17 @@ def insert(conn: sqlite3.Connection, entity: Entity, *, snippet: str) -> None:
 def get(conn: sqlite3.Connection, entity_id: str) -> Entity | None:
     row = conn.execute("SELECT * FROM entities WHERE id = ?", (entity_id,)).fetchone()
     return _row_to_entity(row) if row is not None else None
+
+
+def list_all(conn: sqlite3.Connection) -> list[Entity]:
+    """Every entity in this project's ``knowledge.db`` -- the "full
+    existing corpus" side of ``knowledge/linker.py``'s cross-domain match
+    (one knowledge.db always holds exactly one source's data, see
+    ``core/paths.py``'s one-project-per-source layout, so no further
+    scoping is needed here).
+    """
+    rows = conn.execute("SELECT * FROM entities ORDER BY file_id, start_line").fetchall()
+    return [_row_to_entity(row) for row in rows]
 
 
 def list_by_file(conn: sqlite3.Connection, file_id: str) -> list[Entity]:

@@ -12,6 +12,7 @@ from ragpilot.cli import (
     doctor,
     index,
     init,
+    link,
     references,
     source,
     status,
@@ -28,6 +29,7 @@ app = typer.Typer(
 
 app.add_typer(source.app, name="source")
 app.add_typer(config_cmd.app, name="config")
+app.add_typer(link.app, name="link")
 
 app.command("init", help="Bootstrap the RAGpilot runtime directory.")(init.init)
 app.command("index", help="Scan sources and process pending files.")(index.index)

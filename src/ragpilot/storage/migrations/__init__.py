@@ -32,6 +32,7 @@ MIGRATIONS: dict[DatabaseKind, tuple[Migration, ...]] = {
         Migration(1, "initial_schema", schema.KNOWLEDGE_DB_V1),
         Migration(2, "code_intelligence", schema.KNOWLEDGE_DB_V2),
         Migration(3, "document_pipeline", schema.KNOWLEDGE_DB_V3),
+        Migration(4, "cross_domain_linking", schema.KNOWLEDGE_DB_V4),
     ),
 }
 
