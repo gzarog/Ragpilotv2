@@ -38,6 +38,7 @@ def _run(ctx: AppContext) -> dict[str, Any]:
                 "id": source.id,
                 "path": source.path,
                 "enabled": source.enabled,
+                "status": source.status.value,
                 "counts": counts,
                 "queue_depth": depth,
                 "last_scan_at": source.last_scan_at,
@@ -61,11 +62,12 @@ def status(json_output: Annotated[bool, typer.Option("--json")] = False) -> None
             print_json(data)
             return
 
-        table = Table("Source", "Indexed", "Queued", "Failed", "Queue Depth", "Last Scan")
+        table = Table("Source", "Status", "Indexed", "Queued", "Failed", "Queue Depth", "Last Scan")
         for row in per_source:
             counts = row["counts"]
             table.add_row(
                 row["id"],
+                row["status"],
                 str(counts.get("indexed", 0)),
                 str(counts.get("queued", 0)),
                 str(counts.get("failed", 0)),

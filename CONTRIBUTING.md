@@ -42,6 +42,31 @@ download path, so those tests run in the default suite like everything
 else. CI runs `docling_pdf` tests too, but in a separate,
 non-blocking (`continue-on-error`) job -- see `.github/workflows/ci.yml`.
 
+### The `daemon_subprocess` marker
+
+`ragpilot daemon start`/`stop` spawn and signal a real, detached OS
+process (Phase 7). That is slower and more platform-fragile than
+anything else in the suite (process startup time, signal delivery, PID
+reuse), so tests that actually spawn a process are marked
+`@pytest.mark.daemon_subprocess` and excluded from the default run the
+same way `docling_pdf` is (`addopts` runs
+`-m 'not docling_pdf and not daemon_subprocess'`). Run them explicitly:
+
+```bash
+pytest -m daemon_subprocess -q
+```
+
+The daemon *loop* itself -- watcher wiring, debounce, periodic
+reconciliation, offline/online transitions, graceful shutdown, PID-file
+and health-snapshot bookkeeping -- is fully covered by direct unit/
+integration tests (`test_daemon.py`, `test_service_pid.py`,
+`test_service_health.py`, `test_watcher_local.py`,
+`test_watcher_network.py`) that never spawn a process, so this marker
+only guards the process-spawning/signaling plumbing around it. CI runs
+`daemon_subprocess` tests too, in the same style as `docling_pdf`: a
+separate, non-blocking (`continue-on-error`) job -- see
+`.github/workflows/ci.yml`.
+
 ## Test isolation
 
 Every test must isolate RAGpilot's runtime directory via the `RAGPILOT_HOME`

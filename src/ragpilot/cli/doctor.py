@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,7 +13,9 @@ from ragpilot import __version__
 from ragpilot.core import paths
 from ragpilot.core.errors import EXIT_HEALTH_CHECK_FAILURE
 from ragpilot.core.lifecycle import AppContext
+from ragpilot.core.models import SourceStatus
 from ragpilot.sources.registry import SourceRegistry
+from ragpilot.sources.scanner import check_root_accessible
 from ragpilot.storage import schema
 from ragpilot.storage.migrations import current_version
 from ragpilot.storage.repositories import jobs_repo
@@ -73,8 +74,20 @@ def run_checks(ctx: AppContext) -> list[CheckSection]:
 
     registry = SourceRegistry(ctx.sources_conn, home=ctx.home)
     sources = registry.list(enabled_only=True)
-    unreachable = [s for s in sources if not os.access(s.path, os.R_OK)]
-    sources_status: Status = "ok" if not unreachable else "fail"
+    # A live check here, not just each source's persisted ``status`` --
+    # ``doctor`` must report a source that just went offline even before
+    # the next ``ragpilot index``/daemon pass has had a chance to record
+    # that. Either way this is only ever a WARN, never a FAIL: an
+    # unreachable source (an unmounted network share, most commonly) is
+    # exactly the transient condition Phase 7's offline/online handling
+    # exists to tolerate without treating it as data loss -- see
+    # ``indexing/coordinator.py``.
+    unreachable = [
+        s
+        for s in sources
+        if s.status is SourceStatus.OFFLINE or check_root_accessible(Path(s.path)) is not None
+    ]
+    sources_status: Status = "warn" if unreachable else "ok"
     sections.append(
         CheckSection(
             "Sources",

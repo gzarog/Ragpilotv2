@@ -9,8 +9,8 @@ This repository is being built out in sequential, independently mergeable phases
 3. Docling Document Pipeline — document ingestion, normalization, provenance, failure isolation
 4. Unified Knowledge Model — entity normalization, cross-domain (code <-> docs) linking, confidence/evidence model
 5. Retrieval — search, callers/callees, references, impact analysis, explore, query planner, context builder
-6. MCP Server (this repository's current state) — stdio MCP server and agent-facing tools
-7. Incremental Runtime — daemon, file watchers, polling, reconciliation, crash recovery
+6. MCP Server — stdio MCP server and agent-facing tools
+7. Incremental Runtime (this repository's current state) — daemon, file watchers, polling, reconciliation, crash recovery
 8. Operations — backup/restore, upgrade/rollback, metrics, packaging, release integrity
 9. Optional Intelligence — vector retrieval, reranking, local embeddings, LLM provider abstraction
 
@@ -37,6 +37,10 @@ ragpilot impact MyClass
 ragpilot explore "what breaks if MyClass changes?"
 ragpilot install-agent --write ~/.config/some-mcp-client/ragpilot.json
 ragpilot serve --mcp
+ragpilot watch
+ragpilot daemon start
+ragpilot daemon status --json
+ragpilot daemon stop
 ```
 
 Phase 1 shipped the CLI, layered configuration, the source registry, SQLite
@@ -102,7 +106,7 @@ package (`context:` config: `max_chars`/`max_files`/`max_graph_nodes`).
 Real semantic/vector search stays disabled (`search.semantic: false`);
 `retrieval/semantic.py` is only the seam Phase 9 will implement.
 
-Phase 6 (this repository's current state) adds the MCP server:
+Phase 6 adds the MCP server:
 `ragpilot serve --mcp` starts a stdio MCP server (built on the official
 `mcp` SDK's `FastMCP`) exposing 8 read-only tools --
 `ragpilot_explore` (primary), `ragpilot_search`, `ragpilot_symbol`,
@@ -119,6 +123,29 @@ prints the MCP client config snippet needed to register RAGpilot with a
 client such as Claude Desktop/Claude Code -- it never discovers or edits
 a real client config file on its own, only prints (and, with `--write`,
 writes to the exact path given).
+
+Phase 7 (this repository's current state) adds the incremental runtime:
+`ragpilot watch` runs a daemon in the foreground (`ragpilot daemon
+start|stop|restart|status [--json]` runs the same loop detached in the
+background) that watches every enabled source -- local roots via native
+OS filesystem events (`watchdog`, debounced by `indexing.debounce_ms`),
+network/UNC roots by polling on an interval
+(`indexing.network_poll_seconds`) -- and triggers the exact same per-source
+indexing pass `ragpilot index` runs, plus a periodic full reconciliation
+(`indexing.reconciliation_interval_seconds`, default 15 minutes) as a
+safety net independent of watcher events. Graceful shutdown
+(SIGINT/SIGTERM) lets an in-flight pass finish before releasing Phase 1's
+`RunLock`, never leaving partial state. This phase also fixes a
+correctness gap that predates the daemon: `ragpilot index` alone could
+previously misread a source root going offline (an unmounted network
+share, a deleted directory) as "every file in it was deleted", because
+`os.walk` silently returns nothing for a root it cannot list. A source
+root's reachability is now checked explicitly before any deletion is
+reconciled; an unreachable source flips to a new `offline` status (surfaced
+by `ragpilot source list|info` and, as a WARN rather than a failure, by
+`ragpilot doctor`) with every existing file/entity/document left
+untouched, and flips back to `active` -- reconciling for real -- the
+moment the root is reachable again.
 
 ## Design principles
 

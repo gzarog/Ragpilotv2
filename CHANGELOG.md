@@ -375,3 +375,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     hanging), `mcp/server.py` construction tests, and CLI tests for
     `serve --mcp`'s `mcp.enabled=false` fast-fail path and
     `install-agent`'s print/`--write` output.
+
+- Phase 7: Incremental Runtime.
+  - **Offline-vs-deleted safety fix** (applies to `ragpilot index` too,
+    not only the new daemon): `sources/scanner.py`'s `scan()` is built on
+    `os.walk()`, which silently yields nothing for a root it cannot list
+    (its default `onerror` is a no-op) -- indistinguishable, to a caller
+    only watching `scan()`'s output, from a root that is genuinely empty.
+    A new `check_root_accessible()` performs the one real syscall
+    `os.walk` itself skips (listing the root) before any run is allowed
+    to treat `scan()`'s output as trustworthy for deletion reconciliation.
+    `indexing/coordinator.py`'s `IndexCoordinator.run()` checks it first:
+    if the root is unreachable, the whole scan/diff/delete pass is
+    skipped entirely for that run (every existing file/entity/document
+    stays exactly as it is, still queryable) and the run reports
+    `source_offline`/`offline_reason` instead. A new `Source.status`
+    (`core.models.SourceStatus`: `active`/`offline`, additive
+    `sources.db` migration v2) records this, flipping back to `active`
+    (and reconciling for real) the moment the root is reachable again.
+    `ragpilot source list|info` surface the status; `ragpilot doctor`
+    reports an offline source as a WARN (not a hard FAIL of the whole
+    health check) using the same `check_root_accessible()` check, live.
+    Proven by a dedicated integration test that simulates a source root
+    disappearing mid-project and asserts every existing entity survives
+    an `index` run, the source flips OFFLINE then back to ACTIVE, and a
+    real deletion/addition made while it was "away" is only reconciled
+    once the root is restored.
+  - `indexing/runner.py`: the per-source scan+process+link+status-
+    transition pass factored out of `cli/index.py` into
+    `run_source_pass()`/`build_processor_registry()` -- the exact unit of
+    work both `ragpilot index` and the new daemon trigger, so the daemon
+    is an orchestration layer over the existing pipeline, not a second
+    implementation of it.
+  - `watcher/local.py`: a `watchdog`-based (new dependency: native
+    inotify/FSEvents/ReadDirectoryChangesW, no heavy transitive deps)
+    observer per local source root, debounced by `watcher/debounce.py`'s
+    per-key `Debouncer` -- reuses Phase 1's `indexing.debounce_ms` config
+    field rather than adding a parallel setting, since there is exactly
+    one "how long to wait for a burst of writes to settle" knob whether
+    the burst came from a filesystem event or a network poll tick.
+  - `watcher/network.py`: a polling loop per network/UNC source root
+    (mtime+size fingerprint, reusing `scanner.scan()`'s traversal/ignore
+    rules and offline check) since native filesystem events don't
+    reliably cross a network mount. Interval is a new
+    `indexing.network_poll_seconds` config field (default 30s).
+  - `service/daemon.py`: the daemon loop (`Daemon`). Every enabled source
+    gets a watcher (local: `watchdog` + debounce; network: polling); every
+    trigger -- a debounced local event, a poll tick finding a change, or
+    the periodic reconciliation timer -- funnels through one worker
+    thread into `run_source_pass()`, serialized against Phase 1's exact
+    `RunLock` (acquired/released fresh per pass, not held for the
+    daemon's lifetime) so a concurrent manual `ragpilot index` and the
+    daemon never interleave writes to the same database. A new
+    `indexing.reconciliation_interval_seconds` config field (default
+    900s/15min) drives a full rescan+diff pass per source as a safety net
+    independent of watcher events, proven by a test where a change made
+    without going through the watcher's event path (a debounce set
+    effectively infinite) is still caught on the next reconciliation
+    tick. Graceful shutdown (SIGINT/SIGTERM): stops accepting new
+    triggers immediately, but the worker thread is joined rather than
+    killed, so a pass already in flight always finishes its own
+    (already-atomic, per-file) transactions before the `RunLock` is
+    released -- proven by a test that sends a stop signal mid-pass and
+    asserts every file still ends up fully `INDEXED`, the job queue ends
+    empty, and the lock is immediately re-acquirable afterward.
+  - `service/pid.py` / `service/health.py`: PID-file bookkeeping (built
+    on Phase 1's `RunLock`, not a second locking mechanism -- the lock
+    already prevents two writers; this only lets a *different* CLI
+    invocation find and signal the running one) and a heartbeat/health
+    JSON snapshot (uptime, last reconciliation time, per-source watcher
+    online/offline state) the daemon writes after every pass, so `ragpilot
+    daemon status` can report on a running daemon without talking to its
+    process directly.
+  - `ragpilot watch`: foreground, blocking daemon loop (mirrors `serve
+    --mcp`'s pattern -- a thin, deliberately-untested blocking
+    entrypoint over fully unit-tested logic). `ragpilot daemon
+    start|stop|restart|status [--json]`: spawns/signals/reports on a
+    detached background process running the same loop (POSIX:
+    `start_new_session=True`; Windows: `CREATE_NEW_PROCESS_GROUP |
+    DETACHED_PROCESS`).
+  - `check_same_thread=False` added to `storage/sqlite.py`'s `connect()`:
+    the daemon's worker/reconciliation threads legitimately reuse
+    connections opened on the main thread, with access serialized through
+    the daemon's own lock rather than sqlite3's default same-thread
+    check (which only knows which thread *opened* a connection, not
+    whether access is otherwise serialized).
+  - New `daemon_subprocess` pytest marker (excluded from the default run,
+    same tradeoff Phase 3 made for `docling_pdf`, and run in the same
+    style of separate non-blocking CI job): spawning and signaling a real
+    detached OS process is slower and more platform-fragile than
+    everything else in the suite. The daemon loop itself -- watcher
+    wiring, debounce, reconciliation, offline/online transitions,
+    graceful shutdown, PID/health bookkeeping -- is still fully covered
+    by the default suite via direct unit/integration tests that never
+    spawn a process.

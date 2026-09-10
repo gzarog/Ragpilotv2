@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from ragpilot.core.models import IndexingMode, Source, SourceType
+from ragpilot.core.models import IndexingMode, Source, SourceStatus, SourceType
 from ragpilot.storage.sqlite import transaction
 
 
@@ -21,6 +21,7 @@ def _row_to_source(row: sqlite3.Row) -> Source:
         last_scan_at=row["last_scan_at"],
         last_error=row["last_error"],
         fingerprint=row["fingerprint"],
+        status=SourceStatus(row["status"]),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -33,8 +34,8 @@ def create(conn: sqlite3.Connection, source: Source) -> None:
             INSERT INTO sources (
                 id, path, source_type, enabled, indexing_mode,
                 include_patterns, exclude_patterns, last_scan_at,
-                last_error, fingerprint, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                last_error, fingerprint, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 source.id,
@@ -47,6 +48,7 @@ def create(conn: sqlite3.Connection, source: Source) -> None:
                 source.last_scan_at,
                 source.last_error,
                 source.fingerprint,
+                source.status.value,
                 source.created_at,
                 source.updated_at,
             ),
@@ -88,12 +90,19 @@ def update_scan_result(
     *,
     last_scan_at: str,
     last_error: str | None,
+    status: SourceStatus,
     updated_at: str,
 ) -> None:
+    """Records the outcome of one scan attempt, ``status`` included so a
+    single write carries both the per-file failure summary (``last_error``
+    when the source is reachable) and the offline/online transition --
+    see ``indexing/runner.py``, the only caller.
+    """
     with transaction(conn):
         conn.execute(
-            "UPDATE sources SET last_scan_at = ?, last_error = ?, updated_at = ? WHERE id = ?",
-            (last_scan_at, last_error, updated_at, source_id),
+            "UPDATE sources SET last_scan_at = ?, last_error = ?, status = ?, "
+            "updated_at = ? WHERE id = ?",
+            (last_scan_at, last_error, status.value, updated_at, source_id),
         )
 
 

@@ -34,13 +34,14 @@ def list_sources() -> None:
     with AppContext.bootstrap() as ctx:
         registry = SourceRegistry(ctx.sources_conn, home=ctx.home)
         sources = registry.list()
-        table = Table("ID", "Path", "Type", "Enabled", "Last Scan")
+        table = Table("ID", "Path", "Type", "Enabled", "Status", "Last Scan")
         for source in sources:
             table.add_row(
                 source.id,
                 source.path,
                 source.source_type.value,
                 "yes" if source.enabled else "no",
+                source.status.value,
                 source.last_scan_at or "-",
             )
         console.print(table)

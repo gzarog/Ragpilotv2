@@ -35,6 +35,15 @@ class IndexingConfig(BaseModel):
     max_file_size_mb: int = 100
     follow_symlinks: bool = False
     hash_algorithm: str = "sha256"
+    # Phase 7: how often a network/UNC source is fingerprinted (mtime+size
+    # scan) since native filesystem events don't reliably cross a network
+    # mount -- see watcher/network.py.
+    network_poll_seconds: int = 30
+    # Phase 7: how often the daemon's periodic reconciliation timer does a
+    # full rescan+diff pass per source as a safety net independent of
+    # watcher events, catching whatever a missed/coalesced OS event or a
+    # dropped poll tick missed -- see service/daemon.py.
+    reconciliation_interval_seconds: int = 900
 
 
 class DocumentsConfig(BaseModel):
