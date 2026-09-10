@@ -247,3 +247,43 @@ def test_callers_found_even_when_definition_indexed_after_the_call_site(
     assert resolved.exit_code == 0
     edges = json.loads(resolved.output)["data"]["edges"]
     assert any(e["source_location"].endswith("consumer.py:3") for e in edges), edges
+
+
+def test_callers_found_by_qualified_name_when_unresolved_row_stored_bare(
+    ragpilot_home: Path, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same scenario as above, but querying ``callers`` by the target's
+    fully-qualified name rather than its bare name. An unresolved
+    relationship is always stored under the *bare* name
+    ``code/resolver.py`` fell back to (``target_symbol="bark_loudly"``,
+    never the qualified query text) -- the merge in
+    ``code/graph.py``/``retrieval/graph.py`` must search under both the
+    literal query and each matched entity's bare name, or a
+    qualified-name query finds nothing despite the bare-name query
+    (previous test) finding the same edge.
+    """
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "consumer.py").write_text(
+        "class DogConsumer:\n"
+        "    def handle(self):\n"
+        "        service = AnimalService()\n"
+        "        return service.bark_loudly()\n"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert runner.invoke(app, ["init"]).exit_code == 0
+    _add_source(runner, root)
+    assert runner.invoke(app, ["index"]).exit_code == 0
+
+    (root / "animal_service.py").write_text(
+        "class AnimalService:\n    def bark_loudly(self):\n        return 'WOOF'\n"
+    )
+    assert runner.invoke(app, ["index"]).exit_code == 0
+
+    resolved = runner.invoke(
+        app, ["callers", "animal_service.AnimalService.bark_loudly", "--json"]
+    )
+    assert resolved.exit_code == 0
+    edges = json.loads(resolved.output)["data"]["edges"]
+    assert any(e["source_location"].endswith("consumer.py:4") for e in edges), edges

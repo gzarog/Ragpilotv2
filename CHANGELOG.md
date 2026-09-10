@@ -306,3 +306,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     integration test indexing a mixed code+document project with a
     cross-domain link and exercising `search`/`impact`/`explore`
     (including `--json`) through the real CLI.
+
+- Phase 6: MCP Server.
+  - `mcp/server.py` and `mcp/tools.py`: a stdio MCP server (blueprint:
+    "MCP over stdio as the default agent transport, no external listening
+    port") built on the official `mcp` SDK's high-level
+    `mcp.server.fastmcp.FastMCP` decorator/registry API (pinned `mcp>=1.2,
+    <2` -- the SDK's 2.x line renames `FastMCP` to `MCPServer` and
+    reshuffles its API; 1.x's `FastMCP` is the well-established, directly
+    testable one), exposing 8 tools: `ragpilot_explore` (primary),
+    `ragpilot_search`, `ragpilot_symbol`, `ragpilot_callers`,
+    `ragpilot_callees`, `ragpilot_impact`, `ragpilot_documents`,
+    `ragpilot_status`. Each tool is a thin adapter over the exact same
+    functions the equivalent CLI command calls (`code/graph.py`,
+    `retrieval/lexical.py`, `retrieval/planner.py`, and newly-extracted
+    `_run` helpers in `cli/docs.py`/`cli/status.py`/`cli/impact.py`
+    mirroring `cli/explore.py`'s existing split) -- no retrieval logic is
+    reimplemented, and every tool call bootstraps the same `AppContext`
+    (same `RAGPILOT_HOME`/config resolution) a CLI invocation would, so an
+    agent sees exactly what `ragpilot explore`/`search`/... would show.
+  - `mcp/schemas.py`: one explicit, versioned Pydantic output model per
+    tool (`schema_version`/`ok`/`error` on every response, mirroring the
+    CLI's own `--json` envelope convention) instead of an ad hoc dict, so
+    FastMCP derives deterministic JSON Schema straight from the typed
+    signatures/models.
+  - Bounded responses: `ragpilot_explore` routes through Phase 5's
+    `retrieval/context_builder.py` budget (`context.max_chars`/
+    `max_files`/`max_graph_nodes`), overridable per call via optional
+    tool arguments.
+  - Clear errors: a new `mcp/tools.py`-internal mapping turns any
+    `RagpilotError` into a typed `{"type": "UsageError", "message": ...}`
+    -shaped result (by exception class name) rather than a raw traceback
+    or protocol-level failure -- "no such source", an empty query, an
+    unresolvable symbol, etc. all come back as a normal, `ok=false` tool
+    result a client can branch on.
+  - Timeout enforcement: a new `mcp.request_timeout_seconds` config field
+    (default 30s) bounds every tool call via `asyncio.wait_for` around an
+    `asyncio.to_thread`-run synchronous call. Documented as an honest
+    wall-clock "stop waiting", not true cancellation: Python cannot force-
+    kill a running thread, so a timed-out call's thread runs to
+    completion and cleans itself up in the background rather than
+    blocking the client any further.
+  - stdout/stderr discipline: every MCP-tool-call `AppContext` is
+    bootstrapped with `log_console_format="json"` so WARNING+ console
+    logs go to stderr (plain `logging.StreamHandler`) instead of the
+    CLI's interactive, stdout-default `RichHandler` -- stdout is the MCP
+    stdio transport's JSON-RPC framing channel, and a stray log line on
+    it would corrupt the protocol stream.
+  - `ragpilot serve --mcp`: starts the blocking stdio server loop after
+    checking `mcp.enabled` (fails fast with `ConfigError`/exit code 3 if
+    disabled, never silently starting anyway) -- `--mcp` is required
+    since it is the only transport this phase implements (the optional
+    REST API is Phase 8). Server *construction* (`mcp/server.py`'s
+    `build_server`) is pure and unit-tested directly; the blocking stdio
+    loop itself is not exercised in the test suite.
+  - `ragpilot install-agent [--write PATH]`: prints the standard
+    `{"mcpServers": {"ragpilot": {"command": "ragpilot", "args": ["serve",
+    "--mcp"]}}}` JSON snippet most MCP clients expect, and only writes it
+    to disk when given an explicit `--write PATH`. Deliberately does not
+    discover or edit any real client config file (e.g. `~/.claude.json`)
+    on its own -- printing/writing only to a path the user names is the
+    safe version of blueprint section 74's "connect AI agent" step.
+  - Unit tests calling all 8 tool functions directly (a FastMCP-decorated
+    tool is still just its underlying coroutine) against a small indexed
+    fixture project, plus a context-budget test, a bad-input/unknown-
+    symbol structured-error test, a timeout test (a monkeypatched slow
+    retrieval call proves the configured timeout fires rather than
+    hanging), `mcp/server.py` construction tests, and CLI tests for
+    `serve --mcp`'s `mcp.enabled=false` fast-fail path and
+    `install-agent`'s print/`--write` output.

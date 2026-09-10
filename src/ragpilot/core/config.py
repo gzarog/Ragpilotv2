@@ -66,6 +66,10 @@ class ContextConfig(BaseModel):
 
 class McpConfig(BaseModel):
     enabled: bool = True
+    # Wall-clock budget for one MCP tool call (blueprint: "timeout
+    # enforcement"). Applied via ``asyncio.wait_for`` around the
+    # synchronous retrieval call -- see ``mcp/tools.py``.
+    request_timeout_seconds: float = 30.0
 
 
 class ApiConfig(BaseModel):

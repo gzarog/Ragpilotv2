@@ -112,6 +112,72 @@ def _documentation(
     return documents, confidences
 
 
+def _run(ctx: AppContext, name: str, *, max_depth: int, limit: int) -> dict[str, Any]:
+    """Shared with Phase 6's ``ragpilot_impact`` MCP tool -- the whole
+    blast-radius payload, independent of CLI rendering/JSON printing.
+    """
+    matches = find_symbol_matches(ctx, name)
+    if not matches:
+        return {"query": name, "found": False}
+
+    callers = retrieval_graph.resolved_incoming(
+        ctx,
+        matches,
+        name,
+        relationship_types=(RelationshipType.CALLS,),
+        max_depth=max_depth,
+        limit=limit,
+    )
+    callees = retrieval_graph.resolved_outgoing(
+        ctx,
+        matches,
+        relationship_types=(RelationshipType.CALLS,),
+        max_depth=max_depth,
+        limit=limit,
+    )
+    tests = retrieval_graph.find_tests_referencing(
+        ctx, matches, name, max_depth=max_depth, limit=limit
+    )
+    documents, doc_confidences = _documentation(ctx, matches)
+    defined = _defined_locations(ctx, matches)
+
+    caller_names = sorted(
+        {e.neighbor_entity.qualified_name for e in callers if e.neighbor_entity is not None}
+    )
+    callee_names = sorted(
+        {e.neighbor_entity.qualified_name for e in callees if e.neighbor_entity is not None}
+    )
+    test_names = sorted(
+        {e.neighbor_entity.qualified_name for e in tests if e.neighbor_entity is not None}
+    )
+
+    code_confidence = confidence_rank.highest(
+        e.edge.relationship.confidence for e in (*callers, *callees)
+    )
+    document_confidence = confidence_rank.highest(doc_confidences)
+
+    distinct_callers = {e.neighbor_entity.id for e in callers if e.neighbor_entity is not None}
+    distinct_documents = {(d["path"], d["location"].get("section")) for d in documents}
+    blast_score = len(distinct_callers) + len(distinct_documents)
+    blast_radius = _blast_radius(blast_score)
+
+    return {
+        "query": name,
+        "found": True,
+        "defined": defined,
+        "callers": caller_names,
+        "callees": callee_names,
+        "tests": test_names,
+        "documentation": documents,
+        "confidence": {
+            "code_references": code_confidence.value if code_confidence else None,
+            "document_links": document_confidence.value if document_confidence else None,
+        },
+        "blast_radius": blast_radius,
+        "blast_radius_score": blast_score,
+    }
+
+
 @cli_command
 def impact(
     name: Annotated[str, typer.Argument(help="Symbol name or fully qualified name.")],
@@ -120,88 +186,28 @@ def impact(
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
     with AppContext.bootstrap() as ctx:
-        matches = find_symbol_matches(ctx, name)
-        if not matches:
-            if json_output:
-                print_json({"query": name, "found": False})
-                return
-            console.print(f"[yellow]{no_matches_message(name)}[/yellow]")
-            return
-
-        callers = retrieval_graph.resolved_incoming(
-            ctx,
-            matches,
-            name,
-            relationship_types=(RelationshipType.CALLS,),
-            max_depth=max_depth,
-            limit=limit,
-        )
-        callees = retrieval_graph.resolved_outgoing(
-            ctx,
-            matches,
-            relationship_types=(RelationshipType.CALLS,),
-            max_depth=max_depth,
-            limit=limit,
-        )
-        tests = retrieval_graph.find_tests_referencing(
-            ctx, matches, name, max_depth=max_depth, limit=limit
-        )
-        documents, doc_confidences = _documentation(ctx, matches)
-        defined = _defined_locations(ctx, matches)
-
-        caller_names = sorted(
-            {e.neighbor_entity.qualified_name for e in callers if e.neighbor_entity is not None}
-        )
-        callee_names = sorted(
-            {e.neighbor_entity.qualified_name for e in callees if e.neighbor_entity is not None}
-        )
-        test_names = sorted(
-            {e.neighbor_entity.qualified_name for e in tests if e.neighbor_entity is not None}
-        )
-
-        code_confidence = confidence_rank.highest(
-            e.edge.relationship.confidence for e in (*callers, *callees)
-        )
-        document_confidence = confidence_rank.highest(doc_confidences)
-
-        distinct_callers = {
-            e.neighbor_entity.id for e in callers if e.neighbor_entity is not None
-        }
-        distinct_documents = {(d["path"], d["location"].get("section")) for d in documents}
-        blast_score = len(distinct_callers) + len(distinct_documents)
-        blast_radius = _blast_radius(blast_score)
-
-        payload = {
-            "query": name,
-            "found": True,
-            "defined": defined,
-            "callers": caller_names,
-            "callees": callee_names,
-            "tests": test_names,
-            "documentation": documents,
-            "confidence": {
-                "code_references": code_confidence.value if code_confidence else None,
-                "document_links": document_confidence.value if document_confidence else None,
-            },
-            "blast_radius": blast_radius,
-            "blast_radius_score": blast_score,
-        }
+        payload = _run(ctx, name, max_depth=max_depth, limit=limit)
 
         if json_output:
             print_json(payload)
             return
 
+        if not payload["found"]:
+            console.print(f"[yellow]{no_matches_message(name)}[/yellow]")
+            return
+
         console.print(f"[bold]{name}[/bold]")
-        for d in defined:
+        for d in payload["defined"]:
             console.print(f"Defined: {d['path']}:{d['start_line']}")
-        console.print(f"Callers: {', '.join(caller_names) or '-'}")
-        console.print(f"Callees: {', '.join(callee_names) or '-'}")
-        console.print(f"Tests: {', '.join(test_names) or '-'}")
-        doc_strs = [_format_location(d) for d in documents]
+        console.print(f"Callers: {', '.join(payload['callers']) or '-'}")
+        console.print(f"Callees: {', '.join(payload['callees']) or '-'}")
+        console.print(f"Tests: {', '.join(payload['tests']) or '-'}")
+        doc_strs = [_format_location(d) for d in payload["documentation"]]
         console.print(f"Documentation: {', '.join(doc_strs) or '-'}")
-        code_conf_str = code_confidence.value if code_confidence else "none"
-        doc_conf_str = document_confidence.value if document_confidence else "none"
+        confidence = payload["confidence"]
+        code_conf_str = confidence["code_references"] or "none"
+        doc_conf_str = confidence["document_links"] or "none"
         console.print(
             f"Confidence: Code references: {code_conf_str} / Document links: {doc_conf_str}"
         )
-        console.print(f"Blast radius: {blast_radius}")
+        console.print(f"Blast radius: {payload['blast_radius']}")

@@ -147,21 +147,29 @@ def traverse_symbol(
     """Resolves ``name`` to entities and walks the graph from each match.
 
     ``direction="incoming"`` also merges in unresolved (name-only) edges
-    recorded against the literal ``name`` -- not just when ``name``
-    matches no entity at all, but *even when it does*: a caller processed
-    earlier in the same indexing run than the file defining ``name`` (scan
-    order is not guaranteed -- see ``sources/scanner.py``) has its call
-    resolved by ``code/resolver.py`` only down to ``target_symbol``, never
-    retroactively upgraded to ``target_entity_id`` once the definition is
-    indexed. Without this merge such a caller is silently invisible to
-    ``callers``/``impact`` despite being a real, evidenced edge. ``outgoing``
-    has no such fallback: with no resolved entity there is nothing to walk
-    callees *from*.
+    -- not just when ``name`` matches no entity at all, but *even when it
+    does*: a caller processed earlier in the same indexing run than the
+    file defining ``name`` (scan order is not guaranteed -- see
+    ``sources/scanner.py``) has its call resolved by ``code/resolver.py``
+    only down to ``target_symbol``, never retroactively upgraded to
+    ``target_entity_id`` once the definition is indexed. Without this
+    merge such a caller is silently invisible to ``callers``/``impact``
+    despite being a real, evidenced edge.
+
+    The unresolved row's ``target_symbol`` is whatever ``resolve_reference``
+    fell back to, which is the *bare* name, not necessarily the literal
+    ``name`` queried here -- e.g. querying the qualified
+    ``pkg.Class.method`` must still find a row recorded as bare
+    ``"method"``. So this searches unresolved edges under ``name`` itself
+    AND every matched entity's bare name, not ``name`` alone.
+
+    ``outgoing`` has no such fallback: with no resolved entity there is
+    nothing to walk callees *from*.
     """
     matches = find_symbol_matches(ctx, name)
     edges: list[TraversalEdge] = []
     if matches:
-        seen_conns: list[sqlite3.Connection] = []
+        seen: set[tuple[int, str]] = set()
         for match in matches:
             conn = conn_for_source_path(ctx, match.source_path)
             edges.extend(
@@ -174,11 +182,16 @@ def traverse_symbol(
                     limit=limit,
                 )
             )
-            if direction == "incoming" and conn not in seen_conns:
-                seen_conns.append(conn)
+            if direction != "incoming":
+                continue
+            for symbol in {name, match.entity.name}:
+                key = (id(conn), symbol)
+                if key in seen:
+                    continue
+                seen.add(key)
                 edges.extend(
                     unresolved_symbol_edges(
-                        conn, name, relationship_types=relationship_types, limit=limit
+                        conn, symbol, relationship_types=relationship_types, limit=limit
                     )
                 )
         edges.sort(key=lambda e: (e.depth, *_sort_key(e.relationship)))

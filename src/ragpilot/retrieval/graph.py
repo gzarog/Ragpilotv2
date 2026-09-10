@@ -67,12 +67,15 @@ def references(
 ) -> tuple[list[SourceMatch], list[TraversalEdge]]:
     """All CALLS/IMPORTS/REFERENCES edges touching ``name``, either
     direction -- see module docstring point 1. Incoming also merges in
-    unresolved (name-only) edges against ``name`` itself, same rationale
-    as ``resolved_incoming``.
+    unresolved (name-only) edges against ``name`` AND each match's bare
+    entity name (an unresolved row is stored under whichever bare name
+    ``code/resolver.py`` fell back to, not necessarily the literal query
+    text -- see ``code/graph.py``'s ``traverse_symbol`` docstring), same
+    rationale as ``resolved_incoming``.
     """
     matches = find_symbol_matches(ctx, name)
     edges: list[TraversalEdge] = []
-    seen_conns: list[sqlite3.Connection] = []
+    seen: set[tuple[int, str]] = set()
     for match in matches:
         conn = conn_for_source_path(ctx, match.source_path)
         edges.extend(
@@ -85,11 +88,14 @@ def references(
                 limit=limit,
             )
         )
-        if conn not in seen_conns:
-            seen_conns.append(conn)
+        for symbol in {name, match.entity.name}:
+            key = (id(conn), symbol)
+            if key in seen:
+                continue
+            seen.add(key)
             edges.extend(
                 unresolved_symbol_edges(
-                    conn, name, relationship_types=REFERENCE_TYPES, limit=limit
+                    conn, symbol, relationship_types=REFERENCE_TYPES, limit=limit
                 )
             )
         edges.extend(
@@ -154,17 +160,20 @@ def resolved_incoming(
     with its source (caller) entity/file resolved.
 
     Also merges in unresolved (name-only) edges recorded against ``name``
-    itself -- see ``code/graph.py``'s ``traverse_symbol`` docstring for
-    why a resolved match does not make these redundant: a caller indexed
-    before ``name``'s defining file existed has its call recorded by
-    ``target_symbol`` alone, never retroactively upgraded, and would
+    AND each match's bare entity name -- see ``code/graph.py``'s
+    ``traverse_symbol`` docstring for why a resolved match does not make
+    these redundant, and why the bare name is searched too (an unresolved
+    row is stored under whatever bare name ``code/resolver.py`` fell back
+    to, which may differ from the literal ``name`` queried here, e.g. a
+    qualified query still needs to find a bare-name-stored row): a caller
+    indexed before ``name``'s defining file existed has its call recorded
+    by ``target_symbol`` alone, never retroactively upgraded, and would
     otherwise be silently missing from ``impact``/``explore``'s callers.
     Their resolved *source* (caller) entity is still exactly known --
-    it's only the target end, i.e. ``name`` itself, that was unresolved
-    at write time.
+    it's only the target end that was unresolved at write time.
     """
     out: list[ResolvedEdge] = []
-    seen_conns: list[sqlite3.Connection] = []
+    seen: set[tuple[int, str]] = set()
     for match in matches:
         conn = conn_for_source_path(ctx, match.source_path)
         edges = traverse(
@@ -176,10 +185,13 @@ def resolved_incoming(
             limit=limit,
         )
         out.extend(_resolve(conn, match.source_id, e, "incoming") for e in edges)
-        if conn not in seen_conns:
-            seen_conns.append(conn)
+        for symbol in {name, match.entity.name}:
+            key = (id(conn), symbol)
+            if key in seen:
+                continue
+            seen.add(key)
             unresolved = unresolved_symbol_edges(
-                conn, name, relationship_types=relationship_types, limit=limit
+                conn, symbol, relationship_types=relationship_types, limit=limit
             )
             out.extend(_resolve(conn, match.source_id, e, "incoming") for e in unresolved)
     return out

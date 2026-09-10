@@ -9,7 +9,7 @@ This repository is being built out in sequential, independently mergeable phases
 3. Docling Document Pipeline — document ingestion, normalization, provenance, failure isolation
 4. Unified Knowledge Model — entity normalization, cross-domain (code <-> docs) linking, confidence/evidence model
 5. Retrieval — search, callers/callees, references, impact analysis, explore, query planner, context builder
-6. MCP Server — stdio MCP server and agent-facing tools
+6. MCP Server (this repository's current state) — stdio MCP server and agent-facing tools
 7. Incremental Runtime — daemon, file watchers, polling, reconciliation, crash recovery
 8. Operations — backup/restore, upgrade/rollback, metrics, packaging, release integrity
 9. Optional Intelligence — vector retrieval, reranking, local embeddings, LLM provider abstraction
@@ -35,6 +35,8 @@ ragpilot link add MyClass.my_method path/to/document.md
 ragpilot search "MyClass"
 ragpilot impact MyClass
 ragpilot explore "what breaks if MyClass changes?"
+ragpilot install-agent --write ~/.config/some-mcp-client/ragpilot.json
+ragpilot serve --mcp
 ```
 
 Phase 1 shipped the CLI, layered configuration, the source registry, SQLite
@@ -85,8 +87,8 @@ exists yet -- that is Phase 9 -- and the blueprint bars semantic
 similarity from silently minting high-confidence facts even once it
 does). The MCP server lands in a later phase.
 
-Phase 5 (this repository's current state) adds retrieval: `ragpilot search
-QUERY` merges exact/qualified-identifier matches, `code_fts`/
+Phase 5 adds retrieval: `ragpilot search QUERY` merges
+exact/qualified-identifier matches, `code_fts`/
 `document_fts` hits, file-path matches, and document title/heading
 matches into one ranked list. `ragpilot impact SYMBOL` reports a symbol's
 defining location, callers/callees (Phase 2's CALLS graph), cross-domain
@@ -99,6 +101,24 @@ and assembles the result through a budgeted, deduplicated evidence
 package (`context:` config: `max_chars`/`max_files`/`max_graph_nodes`).
 Real semantic/vector search stays disabled (`search.semantic: false`);
 `retrieval/semantic.py` is only the seam Phase 9 will implement.
+
+Phase 6 (this repository's current state) adds the MCP server:
+`ragpilot serve --mcp` starts a stdio MCP server (built on the official
+`mcp` SDK's `FastMCP`) exposing 8 read-only tools --
+`ragpilot_explore` (primary), `ragpilot_search`, `ragpilot_symbol`,
+`ragpilot_callers`, `ragpilot_callees`, `ragpilot_impact`,
+`ragpilot_documents`, `ragpilot_status` -- each a thin adapter over the
+exact same functions its CLI counterpart calls, so an MCP-speaking agent
+sees exactly what the CLI shows. Every response is a deterministic,
+versioned Pydantic model (`schema_version`/`ok`/`error`); `ragpilot_explore`
+is bounded by Phase 5's context budget; every call is wrapped in a
+configurable wall-clock timeout (`mcp.request_timeout_seconds`, default
+30s); and any `RagpilotError` comes back as a typed, structured error
+instead of a raw traceback. `ragpilot install-agent [--write PATH]`
+prints the MCP client config snippet needed to register RAGpilot with a
+client such as Claude Desktop/Claude Code -- it never discovers or edits
+a real client config file on its own, only prints (and, with `--write`,
+writes to the exact path given).
 
 ## Design principles
 

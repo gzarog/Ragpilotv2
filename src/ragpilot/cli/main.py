@@ -14,9 +14,11 @@ from ragpilot.cli import (
     impact,
     index,
     init,
+    install_agent,
     link,
     references,
     search,
+    serve,
     source,
     status,
     symbol,
@@ -50,6 +52,10 @@ app.command("impact", help="Show blast-radius impact analysis for a symbol.")(im
 app.command(
     "explore", help="Explore a query using all deterministic retrieval strategies."
 )(explore.explore)
+app.command("serve", help="Start RAGpilot as a server (MCP over stdio).")(serve.serve)
+app.command(
+    "install-agent", help="Print (and optionally write) the MCP client config snippet."
+)(install_agent.install_agent)
 
 
 if __name__ == "__main__":
