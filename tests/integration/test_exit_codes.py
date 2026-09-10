@@ -11,7 +11,6 @@ import ragpilot.indexing.coordinator as coordinator_module
 from ragpilot.cli.main import app
 from ragpilot.core.errors import (
     EXIT_CONFIG_ERROR,
-    EXIT_HEALTH_CHECK_FAILURE,
     EXIT_INDEXING_PARTIAL_FAILURE,
     EXIT_INVALID_ARGUMENTS,
     EXIT_SOURCE_UNAVAILABLE,
@@ -91,9 +90,13 @@ def test_partial_indexing_failure_is_reported_and_does_not_crash(
     assert totals.get("failed", 0) == 1
 
 
-def test_doctor_reports_unhealthy_when_source_unreachable(
+def test_doctor_reports_warning_when_source_unreachable(
     ragpilot_home: Path, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Phase 7's offline-vs-deleted safety fix: an unreachable source root
+    # (unmounted network share, deleted directory) must never fail
+    # `doctor` outright -- see indexing/coordinator.py and
+    # cli/doctor.py's "Sources" check.
     source_dir = tmp_path / "src"
     source_dir.mkdir()
     (source_dir / "a.py").write_text("print('a')")
@@ -104,7 +107,11 @@ def test_doctor_reports_unhealthy_when_source_unreachable(
     shutil.rmtree(source_dir)
 
     result = runner.invoke(app, ["doctor", "--json"])
-    assert result.exit_code == EXIT_HEALTH_CHECK_FAILURE
+    assert result.exit_code == 0
 
     payload = json.loads(result.output)
-    assert payload["data"]["result"] == "UNHEALTHY"
+    assert payload["data"]["result"] == "HEALTHY WITH WARNINGS"
+    sources_section = next(
+        s for s in payload["data"]["sections"] if s["name"] == "Sources"
+    )
+    assert sources_section["checks"][0]["status"] == "warn"

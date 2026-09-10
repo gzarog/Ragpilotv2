@@ -7,7 +7,7 @@ discovered plus that project's job queue and error log.
 
 from __future__ import annotations
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 _MIGRATIONS_TABLE = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -43,6 +43,15 @@ SOURCES_DB_V1: tuple[str, ...] = (
         updated_at TEXT NOT NULL
     )
     """,
+)
+
+# Phase 7: online/offline source status (blueprint's incremental runtime --
+# see ``core.models.SourceStatus``). Additive-only migration layered on top
+# of SOURCES_DB_V1 -- see storage/migrations. A plain ``ALTER TABLE ADD
+# COLUMN`` with a default keeps every already-registered source ``active``
+# without a backfill statement.
+SOURCES_DB_V2: tuple[str, ...] = (
+    "ALTER TABLE sources ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
 )
 
 KNOWLEDGE_DB_V1: tuple[str, ...] = (

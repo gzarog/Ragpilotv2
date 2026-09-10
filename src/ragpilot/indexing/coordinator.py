@@ -25,7 +25,7 @@ from ragpilot.security.path_guard import PathGuard
 from ragpilot.sources import detector
 from ragpilot.sources.fingerprint import hash_file
 from ragpilot.sources.ignore import IgnoreMatcher
-from ragpilot.sources.scanner import scan
+from ragpilot.sources.scanner import check_root_accessible, scan
 from ragpilot.storage.repositories import errors_repo, files_repo, jobs_repo
 from ragpilot.telemetry.logging import get_logger, log_event
 
@@ -118,6 +118,13 @@ class IndexRunResult:
     # neither is included here.
     touched_code_file_ids: list[str] = field(default_factory=list)
     touched_document_file_ids: list[str] = field(default_factory=list)
+    # Set when the source root itself could not be listed this run (see
+    # ``sources.scanner.check_root_accessible``) -- every other field
+    # above is left at its zero value, since no scan was attempted at
+    # all. Distinct from a per-file failure: this is "the whole source
+    # was unreachable", not "one file in it was bad".
+    source_offline: bool = False
+    offline_reason: str | None = None
 
 
 class IndexCoordinator:
@@ -142,6 +149,20 @@ class IndexCoordinator:
 
     def run(self) -> IndexRunResult:
         result = IndexRunResult()
+
+        # Checked before anything else -- including before
+        # ``recover_stuck``, which is safe to defer, but scanning an
+        # unreachable root and trusting its (empty) output would feed
+        # ``find_deleted`` a false "every file is gone" diff. See
+        # ``sources.scanner.check_root_accessible``'s docstring for why
+        # ``os.walk`` alone can't be trusted to distinguish that from a
+        # genuinely empty, reachable directory.
+        offline_reason = check_root_accessible(self._root)
+        if offline_reason is not None:
+            result.source_offline = True
+            result.offline_reason = offline_reason
+            return result
+
         jobs_repo.recover_stuck(self._conn)
 
         guard = PathGuard([self._root])

@@ -17,6 +17,20 @@ class SourceType(StrEnum):
     NETWORK = "network"
 
 
+class SourceStatus(StrEnum):
+    """Whether a source's root was reachable on its most recent scan
+    attempt (``ragpilot index`` or the Phase 7 daemon) -- distinct from
+    whether the source is *enabled*. ``OFFLINE`` means the root itself
+    (not an individual file inside it) could not be listed: an unmounted
+    network share, a revoked permission, a deleted directory. See
+    ``sources/scanner.py``'s ``check_root_accessible`` and
+    ``indexing/runner.py`` for the mechanism that sets this.
+    """
+
+    ACTIVE = "active"
+    OFFLINE = "offline"
+
+
 class IndexingMode(StrEnum):
     FULL = "full"
 
@@ -63,6 +77,7 @@ class Source(BaseModel):
     last_scan_at: str | None = None
     last_error: str | None = None
     fingerprint: str | None = None
+    status: SourceStatus = SourceStatus.ACTIVE
     created_at: str
     updated_at: str
 

@@ -52,6 +52,23 @@ def tmp_dir(home: Path | None = None) -> Path:
     return (home or runtime_dir()) / "tmp"
 
 
+def daemon_pid_path(home: Path | None = None) -> Path:
+    """The Phase 7 daemon's PID-file -- one daemon per ``RAGPILOT_HOME``,
+    mirroring ``sources.db``'s own one-per-home scope. See
+    ``service/pid.py``.
+    """
+    return (home or runtime_dir()) / "daemon.pid"
+
+
+def daemon_health_path(home: Path | None = None) -> Path:
+    """Where the running daemon's heartbeat/health snapshot is written,
+    so ``ragpilot daemon status``/``doctor`` can read it from a fresh CLI
+    invocation without asking the daemon process itself. See
+    ``service/health.py``.
+    """
+    return (home or runtime_dir()) / "daemon_health.json"
+
+
 def projects_dir(home: Path | None = None) -> Path:
     return (home or runtime_dir()) / "projects"
 

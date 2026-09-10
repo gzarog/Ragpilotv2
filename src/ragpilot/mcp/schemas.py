@@ -264,6 +264,11 @@ class SourceStatus(BaseModel):
     id: str
     path: str
     enabled: bool
+    # "active" | "offline" (``core.models.SourceStatus``, Phase 7) -- kept
+    # as a plain string here rather than importing that enum, matching
+    # this schema module's existing convention of not depending on
+    # core.models.
+    status: str = "active"
     counts: dict[str, int]
     queue_depth: int
     last_scan_at: str | None = None

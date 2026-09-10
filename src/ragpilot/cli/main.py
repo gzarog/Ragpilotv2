@@ -8,6 +8,7 @@ from ragpilot.cli import (
     callees,
     callers,
     config_cmd,
+    daemon,
     docs,
     doctor,
     explore,
@@ -23,6 +24,7 @@ from ragpilot.cli import (
     status,
     symbol,
     version_cmd,
+    watch,
 )
 
 app = typer.Typer(
@@ -35,6 +37,7 @@ app = typer.Typer(
 app.add_typer(source.app, name="source")
 app.add_typer(config_cmd.app, name="config")
 app.add_typer(link.app, name="link")
+app.add_typer(daemon.app, name="daemon")
 
 app.command("init", help="Bootstrap the RAGpilot runtime directory.")(init.init)
 app.command("index", help="Scan sources and process pending files.")(index.index)
@@ -53,6 +56,7 @@ app.command(
     "explore", help="Explore a query using all deterministic retrieval strategies."
 )(explore.explore)
 app.command("serve", help="Start RAGpilot as a server (MCP over stdio).")(serve.serve)
+app.command("watch", help="Run the indexing daemon in the foreground.")(watch.watch)
 app.command(
     "install-agent", help="Print (and optionally write) the MCP client config snippet."
 )(install_agent.install_agent)
