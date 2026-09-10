@@ -123,8 +123,34 @@ def mark_failed(conn: sqlite3.Connection, file_id: str, *, error: str, updated_a
 
 
 def delete(conn: sqlite3.Connection, file_id: str) -> None:
+    """Deletes a file and cascades its derived-content rows.
+
+    ``entities``/``relationships`` (Phase 2) and ``documents``/
+    ``document_sections`` (Phase 3) all carry a ``file_id`` foreign key
+    into ``files``, but were added by later, already-applied migrations
+    without an ``ON DELETE CASCADE`` clause -- so with ``PRAGMA
+    foreign_keys = ON`` (storage/sqlite.py), deleting a ``files`` row with
+    surviving derived rows would raise ``IntegrityError`` instead of
+    reconciling a source's deleted file away. Clearing them here, in the
+    same transaction, keeps that reconciliation crash-free without
+    touching those migrations.
+    """
     with transaction(conn):
         conn.execute("DELETE FROM index_jobs WHERE file_id = ?", (file_id,))
+        conn.execute(
+            "DELETE FROM code_fts WHERE entity_id IN "
+            "(SELECT id FROM entities WHERE file_id = ?)",
+            (file_id,),
+        )
+        conn.execute("DELETE FROM relationships WHERE file_id = ?", (file_id,))
+        conn.execute("DELETE FROM entities WHERE file_id = ?", (file_id,))
+        conn.execute(
+            "DELETE FROM document_fts WHERE section_id IN "
+            "(SELECT id FROM document_sections WHERE file_id = ?)",
+            (file_id,),
+        )
+        conn.execute("DELETE FROM document_sections WHERE file_id = ?", (file_id,))
+        conn.execute("DELETE FROM documents WHERE file_id = ?", (file_id,))
         conn.execute("DELETE FROM files WHERE id = ?", (file_id,))
 
 

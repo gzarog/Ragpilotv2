@@ -14,6 +14,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      # Docling pulls in torch as a base dependency (for PDF layout/table
+      # structure models). PyPI's default Linux torch wheel bundles CUDA
+      # (several GB of nvidia-* packages neither this CI nor Phase 3's
+      # OCR-off, GPU-free pipeline needs) -- installing the CPU-only build
+      # first so torch's own resolution is already satisfied keeps this
+      # job's install size and time reasonable. macOS/Windows PyPI wheels
+      # are CPU-only already, so this is Linux-only. torchvision must come
+      # from the SAME index in the SAME command: resolving it separately
+      # (e.g. later, from default PyPI, as a transitive dependency) can
+      # pick a torchvision build compiled against a different torch build
+      # than the one just installed, which fails at import time with
+      # "operator torchvision::nms does not exist".
+      - name: Install CPU-only torch (Linux runners pull CUDA by default)
+        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
       - name: Install project
         run: pip install -e ".[dev]"
       - name: Ruff
@@ -33,7 +49,44 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install CPU-only torch (Linux runners pull CUDA by default)
+        if: matrix.os == 'ubuntu-latest'
+        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
       - name: Install project
         run: pip install -e ".[dev]"
       - name: Pytest
+        # docling_pdf-marked tests are excluded by default (see
+        # pyproject.toml's addopts) -- they exercise Docling's real PDF
+        # pipeline, which downloads model weights on first use, and must
+        # not gate this job's pass/fail. See the docling-pdf-tests job
+        # below for that coverage, run non-blocking.
         run: pytest -q
+
+  # Optional, non-blocking: actually runs Docling's PDF conversion (model
+  # download from Hugging Face included). Kept separate from `test` above
+  # so a slow/unavailable model download never gates a merge -- see
+  # CONTRIBUTING.md for the same command run locally.
+  docling-pdf-tests:
+    name: Docling PDF tests (non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install CPU-only torch (Linux runners pull CUDA by default)
+        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+      - name: Install project
+        run: pip install -e ".[dev]"
+      - name: Cache Docling/Hugging Face model weights
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: docling-hf-models-${{ runner.os }}
+      - name: Pytest (docling_pdf)
+        run: pytest -m docling_pdf -q

@@ -10,9 +10,11 @@ import typer
 
 from ragpilot.code.processor import code_processor
 from ragpilot.core import paths
+from ragpilot.core.config import RagpilotConfig
 from ragpilot.core.errors import IndexingPartialFailureError
 from ragpilot.core.lifecycle import AppContext
 from ragpilot.core.models import FileKind
+from ragpilot.documents.pipeline import document_processor
 from ragpilot.indexing.coordinator import IndexCoordinator, ProcessorRegistry, default_registry
 from ragpilot.sources.registry import SourceRegistry
 from ragpilot.storage.repositories import sources_repo
@@ -20,9 +22,14 @@ from ragpilot.storage.repositories import sources_repo
 from ._common import cli_command, console
 
 
-def _processor_registry() -> ProcessorRegistry:
+def _processor_registry(config: RagpilotConfig) -> ProcessorRegistry:
     registry = default_registry()
     registry.register(FileKind.CODE, code_processor)
+    # Respects documents.enabled (core/config.py) -- when off, document-kind
+    # files still index via the default raw processor (recorded, marked
+    # INDEXED) just without Docling-derived content.
+    if config.documents.enabled:
+        registry.register(FileKind.DOCUMENT, document_processor)
     return registry
 
 
@@ -46,7 +53,7 @@ def index(
                 return
 
             total_failed = 0
-            processors = _processor_registry()
+            processors = _processor_registry(ctx.config)
             for source in sources:
                 project_id = paths.project_id_for_path(Path(source.path))
                 conn = ctx.project_conn(project_id)

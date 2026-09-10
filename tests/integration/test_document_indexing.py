@@ -1,0 +1,145 @@
+"""End-to-end document indexing via the real CLI: a mixed-format
+directory indexes cleanly, a corrupt document-kind file is isolated
+(Phase 1/2's "poisoned file" pattern applied to Phase 3's
+``document_processor``), and an oversized PDF is marked
+``SKIPPED_LIMIT`` rather than crashing or being silently dropped.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import shutil
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+import ragpilot.indexing.coordinator as coordinator_module
+from ragpilot.cli.main import app
+from ragpilot.core import paths
+from ragpilot.core.errors import EXIT_INDEXING_PARTIAL_FAILURE
+from ragpilot.storage.migrations import apply_migrations
+from ragpilot.storage.repositories import documents_repo
+from ragpilot.storage.sqlite import connect
+
+FIXTURES = Path(__file__).parent.parent / "fixtures" / "documents"
+SOURCE_ID_RE = re.compile(r"Added source (\S+)")
+
+
+def _add_source(runner: CliRunner, path: Path) -> str:
+    result = runner.invoke(app, ["source", "add", str(path)])
+    assert result.exit_code == 0, result.output
+    match = SOURCE_ID_RE.search(result.output)
+    assert match is not None, result.output
+    return match.group(1)
+
+
+def _knowledge_conn(home: Path, source_path: Path):  # noqa: ANN201 - test helper
+    project_id = paths.project_id_for_path(source_path)
+    conn = connect(paths.project_db_path(project_id, home))
+    apply_migrations(conn, "knowledge")
+    return conn
+
+
+@pytest.fixture(autouse=True)
+def _force_permanent_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Same rationale as test_code_indexing.py: real backoff needs 5 index
+    # runs before a failure is permanent; force it on the first attempt.
+    monkeypatch.setattr(coordinator_module.retry, "is_permanent", lambda attempt: True)
+
+
+def test_mixed_format_directory_isolates_corrupt_document(
+    ragpilot_home: Path, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "docs_project"
+    root.mkdir()
+    for name in ("simple.md", "simple.txt", "simple.html", "sample.eml", "corrupt.docx"):
+        shutil.copy(FIXTURES / name, root / name)
+    monkeypatch.chdir(tmp_path)
+
+    assert runner.invoke(app, ["init"]).exit_code == 0
+    _add_source(runner, root)
+
+    result = runner.invoke(app, ["index"])
+    assert result.exception is None or isinstance(result.exception, SystemExit), result.output
+    assert result.exit_code == EXIT_INDEXING_PARTIAL_FAILURE
+
+    status = runner.invoke(app, ["status", "--json"])
+    assert status.exit_code == 0
+    totals = json.loads(status.output)["data"]["totals"]["by_status"]
+    assert totals.get("failed", 0) == 1
+    assert totals.get("indexed", 0) == 4
+
+
+def test_docs_cli_and_fts_reflect_indexed_documents(
+    ragpilot_home: Path, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "docs_project"
+    root.mkdir()
+    for name in ("simple.md", "document.docx", "spreadsheet.xlsx", "presentation.pptx"):
+        shutil.copy(FIXTURES / name, root / name)
+    monkeypatch.chdir(tmp_path)
+
+    assert runner.invoke(app, ["init"]).exit_code == 0
+    source_id = _add_source(runner, root)
+    index_result = runner.invoke(app, ["index"])
+    assert index_result.exit_code == 0, index_result.output
+
+    docs_result = runner.invoke(app, ["docs", "--json"])
+    assert docs_result.exit_code == 0, docs_result.output
+    payload = json.loads(docs_result.output)
+    assert payload["schema_version"] == "1"
+    rows = payload["data"]["documents"]
+    assert len(rows) == 4
+    by_format = {row["format"] for row in rows}
+    assert by_format == {"markdown", "docx", "xlsx", "pptx"}
+    assert all(row["status"] == "indexed" for row in rows)
+
+    markdown_row = next(row for row in rows if row["format"] == "markdown")
+    assert markdown_row["title"] == "Title Heading"
+    assert markdown_row["section_count"] == 2
+    assert markdown_row["table_count"] == 1
+
+    filtered = runner.invoke(app, ["docs", "--source", source_id, "--json"])
+    assert filtered.exit_code == 0
+    assert len(json.loads(filtered.output)["data"]["documents"]) == 4
+
+    conn = _knowledge_conn(ragpilot_home, root)
+    try:
+        hits = documents_repo.search_fts(conn, "Section")
+        assert any(h["document_id"] is not None for h in hits)
+        docx_hits = documents_repo.search_fts(conn, "alpha")
+        assert len(docx_hits) >= 1
+    finally:
+        conn.close()
+
+
+def test_oversized_pdf_is_skipped_limit_without_model_download(
+    ragpilot_home: Path, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # documents.max_pages=0 rejects the fixture's 1-page PDF via
+    # docling_adapter.pdf_page_count (pypdfium2 only) *before*
+    # docling_adapter.convert() would ever run -- so this test never
+    # touches Docling's ML pipeline and needs no ``docling_pdf`` marker.
+    monkeypatch.setenv("RAGPILOT_DOCUMENTS__MAX_PAGES", "0")
+    root = tmp_path / "docs_project"
+    root.mkdir()
+    shutil.copy(FIXTURES / "sample.pdf", root / "sample.pdf")
+    monkeypatch.chdir(tmp_path)
+
+    assert runner.invoke(app, ["init"]).exit_code == 0
+    _add_source(runner, root)
+    result = runner.invoke(app, ["index"])
+    assert result.exit_code == 0, result.output
+
+    status = runner.invoke(app, ["status", "--json"])
+    totals = json.loads(status.output)["data"]["totals"]["by_status"]
+    assert totals.get("skipped_limit", 0) == 1
+    assert totals.get("failed", 0) == 0
+
+    docs_result = runner.invoke(app, ["docs", "--json"])
+    rows = json.loads(docs_result.output)["data"]["documents"]
+    assert len(rows) == 1
+    assert rows[0]["status"] == "skipped_limit"
+    assert rows[0]["format"] is None

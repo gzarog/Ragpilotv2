@@ -46,6 +46,7 @@ def test_knowledge_db_has_expected_tables(tmp_path: Path) -> None:
         }
         assert {"files", "index_jobs", "index_errors", "schema_migrations", "metadata"} <= tables
         assert {"entities", "relationships", "code_fts"} <= tables
+        assert {"documents", "document_sections", "document_fts"} <= tables
     finally:
         conn.close()
 

@@ -17,6 +17,13 @@ dependencies = [
     "pyyaml>=6",
     "tree-sitter>=0.24,<0.27",
     "tree-sitter-language-pack>=1.17,<2",
+    # Plain "docling" only -- its OCR/VLM/ASR/XBRL extras (easyocr,
+    # ocrmac, rapidocr, onnxruntime, remote-serving, tesserocr, vlm, xbrl,
+    # asr) are deliberately not added; Phase 3 wires up PDF/DOCX/PPTX/
+    # XLSX/HTML/Markdown/TXT/EML only. Docling's own base install still
+    # pulls in torch + layout/table-structure model packages for PDF --
+    # unavoidable, see docs/CHANGELOG and documents/docling_adapter.py.
+    "docling>=2.40,<3",
 ]
 
 [project.optional-dependencies]
@@ -25,6 +32,13 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.10",
     "types-PyYAML",
+    # Dev/test-only: generate .docx/.pptx/.xlsx fixtures in
+    # tests/fixtures/documents/. Already pulled in transitively by
+    # docling's standard install; declared explicitly here since tests
+    # import them directly.
+    "python-docx>=1.1",
+    "python-pptx>=1.0",
+    "openpyxl>=3.1",
 ]
 
 [project.scripts]
@@ -58,4 +72,16 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+# docling_pdf: exercises Docling's actual PDF conversion, which downloads
+# layout/table-structure model weights from Hugging Face on first use.
+# That is a real network dependency (speed + flakiness risk) a sandboxed
+# or offline CI runner should not have to pay on every default run, so
+# these tests are excluded from `pytest -q` and must be run explicitly
+# with `pytest -m docling_pdf` (see CONTRIBUTING.md). Every other
+# supported document format (DOCX/PPTX/XLSX/HTML/Markdown/TXT/EML) is
+# converted by Docling's rule-based backends and never touches this path,
+# so it is exercised by the default suite like everything else.
+addopts = "-ra -m 'not docling_pdf'"
+markers = [
+    "docling_pdf: exercises Docling's real PDF conversion pipeline (network + model download on first run); excluded from the default run, see CONTRIBUTING.md",
+]
