@@ -308,3 +308,37 @@ def test_vectors_rebuild_and_doctor_report_the_ann_backend(
     detail = semantic_section["checks"][0]["detail"]
     assert "usearch" in detail
     assert "vector(s)" in detail
+
+
+def test_hybrid_flag_merges_and_reranks_without_changing_existing_keys(
+    ragpilot_home: Path, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Blueprint sections 21/22: ``--hybrid`` adds a merged, reranked
+    view alongside (never instead of) the existing ``results``/
+    ``semantic`` keys, with lexical tiers always outranking semantic-only
+    hits.
+    """
+    root = tmp_path / "project"
+    _write_project(root)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("RAGPILOT_SEARCH__SEMANTIC", "true")
+
+    assert runner.invoke(app, ["init"]).exit_code == 0
+    assert runner.invoke(app, ["source", "add", str(root)]).exit_code == 0
+    assert runner.invoke(app, ["index"]).exit_code == 0
+
+    result = runner.invoke(app, ["search", "bark_loudly", "--hybrid", "--json"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)["data"]
+    assert payload["results"] != []
+    assert payload["semantic"]["available"] is True
+    assert "hybrid" in payload
+    assert payload["hybrid"] != []
+    lexical_ids = {r["id"] for r in payload["results"]}
+    first_hit = payload["hybrid"][0]
+    assert first_hit["id"] in lexical_ids
+    assert first_hit["tier"] != "semantic_only"
+
+    no_flag_result = runner.invoke(app, ["search", "bark_loudly", "--json"])
+    assert no_flag_result.exit_code == 0
+    assert "hybrid" not in json.loads(no_flag_result.output)["data"]

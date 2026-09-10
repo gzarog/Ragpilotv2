@@ -9,7 +9,7 @@ import typer
 from rich.table import Table
 
 from ragpilot.core.lifecycle import AppContext
-from ragpilot.retrieval import lexical, query_classifier, semantic
+from ragpilot.retrieval import lexical, merger, query_classifier, reranker, semantic
 
 from ._common import cli_command, console, print_json
 
@@ -23,6 +23,13 @@ def search(
     json_output: Annotated[bool, typer.Option("--json")] = False,
     explain: Annotated[
         bool, typer.Option("--explain", help="Show per-stage timing diagnostics.")
+    ] = False,
+    hybrid: Annotated[
+        bool,
+        typer.Option(
+            "--hybrid",
+            help="Also show one merged, reranked view of lexical and semantic results.",
+        ),
     ] = False,
 ) -> None:
     with AppContext.bootstrap() as ctx:
@@ -67,6 +74,15 @@ def search(
                 )
             )
 
+        # Blueprint sections 21/22: an additive, opt-in merged+reranked
+        # view -- never replaces ``results``/``semantic`` above, which
+        # keep their own established, separately-tested contracts.
+        ranked_hits = None
+        if hybrid:
+            semantic_hits = list(semantic_result.results) if semantic_result else []
+            candidates = merger.merge(results, semantic_hits)
+            ranked_hits = reranker.rerank(candidates, limit=limit)
+
         if json_output:
             payload: dict[str, object] = {
                 "query": query,
@@ -78,6 +94,8 @@ def search(
                     "reason": semantic_result.reason,
                     "results": [h.to_dict() for h in semantic_result.results],
                 }
+            if ranked_hits is not None:
+                payload["hybrid"] = [h.to_dict() for h in ranked_hits]
             if explain:
                 payload["explain"] = {
                     "query_kind": query_classifier.classify_query(query).value,
@@ -118,6 +136,20 @@ def search(
             console.print(
                 f"[dim]Semantic search skipped: lexical confidence is {confidence.value}.[/dim]"
             )
+
+        if ranked_hits is not None:
+            console.print("[bold]Hybrid ranked results[/bold]")
+            hybrid_table = Table("Kind", "Tier", "Title", "Path", "Semantic")
+            for ranked_hit in ranked_hits:
+                score = ranked_hit.candidate.semantic_score
+                hybrid_table.add_row(
+                    ranked_hit.candidate.kind,
+                    ranked_hit.tier_label,
+                    ranked_hit.candidate.title,
+                    ranked_hit.candidate.path,
+                    f"{score:.3f}" if score is not None else "-",
+                )
+            console.print(hybrid_table)
 
         if explain:
             console.print(
