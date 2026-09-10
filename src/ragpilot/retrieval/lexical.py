@@ -31,6 +31,7 @@ from typing import Any
 from ragpilot.code.graph import all_project_connections
 from ragpilot.core.lifecycle import AppContext
 from ragpilot.core.models import EntityType
+from ragpilot.retrieval import cache as search_cache
 from ragpilot.storage.repositories import documents_repo, entities_repo, files_repo
 
 DEFAULT_LIMIT = 20
@@ -322,14 +323,37 @@ def search_with_timings(
     breakdown (blueprint sections 33/34) -- ``ragpilot search --explain``
     is the one caller that reads ``.timings``; every other caller keeps
     using the plain ``search()`` wrapper above.
+
+    Consults ``search.cache`` first when enabled (blueprint section 23;
+    see ``retrieval/cache.py`` for why this only pays off in a long-lived
+    process). A cache hit reports its own lookup cost as a single
+    ``cache_hit`` stage rather than replaying the original call's
+    per-stage timings, which would misrepresent this call's actual cost.
     """
     query = query.strip()
-    stopwatch = _StopwatchTimings()
     if not query:
         return TimedSearchResult(results=[])
 
+    connections = list(all_project_connections(ctx))
+    cache_config = ctx.config.search.cache
+    cache_key: str | None = None
+    if cache_config.enabled:
+        started = time.perf_counter()
+        result_cache = search_cache.get_search_result_cache(cache_config.max_queries)
+        cache_key = search_cache.search_cache_key(
+            query=query, mode="lexical", limit=limit, connections=[c for _, _, c in connections]
+        )
+        cached = result_cache.get(cache_key)
+        if cached is not None:
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            return TimedSearchResult(
+                results=cached,
+                timings=[StageTiming(name="cache_hit", hits=len(cached), duration_ms=elapsed_ms)],
+            )
+
+    stopwatch = _StopwatchTimings()
     collected: list[SearchResult] = []
-    for source_id, _source_path, conn in all_project_connections(ctx):
+    for source_id, _source_path, conn in connections:
         started = time.perf_counter()
         entity_hits = _search_entities(conn, source_id, query, limit)
         stopwatch.record("entities", started, entity_hits)
@@ -348,4 +372,8 @@ def search_with_timings(
     started = time.perf_counter()
     merged = _merge(collected)[:limit]
     stopwatch.record("merge", started, merged)
+
+    if cache_config.enabled and cache_key is not None:
+        search_cache.get_search_result_cache(cache_config.max_queries).set(cache_key, merged)
+
     return TimedSearchResult(results=merged, timings=stopwatch.entries)

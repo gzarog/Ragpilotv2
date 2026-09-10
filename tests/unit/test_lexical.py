@@ -9,6 +9,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from ragpilot.core.config import RagpilotConfig
+from ragpilot.core.lifecycle import AppContext
 from ragpilot.core.models import (
     Document,
     DocumentFormat,
@@ -20,6 +22,7 @@ from ragpilot.core.models import (
     Paragraph,
 )
 from ragpilot.retrieval import lexical
+from ragpilot.sources.registry import SourceRegistry
 from ragpilot.storage.migrations import apply_migrations
 from ragpilot.storage.repositories import documents_repo, entities_repo, files_repo
 from ragpilot.storage.sqlite import connect, transaction
@@ -222,6 +225,85 @@ def test_path_search_matches_by_token_and_falls_back_to_substring(tmp_path: Path
         assert [f.id for f in fragment_hits] == ["f1"]
     finally:
         conn.close()
+
+
+def test_search_with_timings_caches_and_invalidates_on_external_write(
+    ragpilot_home: Path, tmp_path: Path
+) -> None:
+    """Blueprint section 23: a repeated query against an unchanged
+    project is served from cache (reported as a ``cache_hit`` stage),
+    and a write from a *different* connection (a reindex, in practice)
+    invalidates it automatically -- no explicit cache-clear call needed.
+    """
+    ctx = AppContext.bootstrap(home=ragpilot_home, cwd=tmp_path, cli_overrides={})
+    try:
+        project_root = tmp_path / "proj"
+        project_root.mkdir()
+        registry = SourceRegistry(ctx.sources_conn, home=ctx.home)
+        registry.add(str(project_root))
+        from ragpilot.core import paths
+
+        project_id = paths.project_id_for_path(project_root)
+        conn = ctx.project_conn(project_id)
+        files_repo.insert(conn, _file("f1", "pkg/dog.py", FileKind.CODE))
+        with transaction(conn):
+            entities_repo.insert(
+                conn, _entity("e1", "Dog", "pkg.Dog", "f1"), snippet="class Dog: ..."
+            )
+
+        first = lexical.search_with_timings(ctx, "Dog")
+        assert "e1" in [r.id for r in first.results]
+        assert {t.name for t in first.timings} >= {"entities", "documents", "paths", "merge"}
+
+        second = lexical.search_with_timings(ctx, "Dog")
+        assert [r.id for r in second.results] == [r.id for r in first.results]
+        assert [t.name for t in second.timings] == ["cache_hit"]
+
+        # A write from a separate connection (mirrors a real reindex,
+        # which always opens its own connection) bumps PRAGMA
+        # data_version as observed by ``conn`` -- the cache key changes,
+        # so the next search recomputes rather than serving stale data.
+        other_conn = connect(paths.project_db_path(project_id, ctx.home))
+        try:
+            with transaction(other_conn):
+                entities_repo.insert(
+                    other_conn, _entity("e2", "Cat", "pkg.Cat", "f1"), snippet="class Cat: ..."
+                )
+        finally:
+            other_conn.close()
+
+        third = lexical.search_with_timings(ctx, "Dog")
+        assert [t.name for t in third.timings] != ["cache_hit"]
+    finally:
+        ctx.close()
+
+
+def test_search_with_timings_respects_cache_disabled(ragpilot_home: Path, tmp_path: Path) -> None:
+    ctx = AppContext.bootstrap(
+        home=ragpilot_home, cwd=tmp_path, cli_overrides={"search": {"cache": {"enabled": False}}}
+    )
+    try:
+        assert isinstance(ctx.config, RagpilotConfig)
+        project_root = tmp_path / "proj"
+        project_root.mkdir()
+        registry = SourceRegistry(ctx.sources_conn, home=ctx.home)
+        registry.add(str(project_root))
+        from ragpilot.core import paths
+
+        project_id = paths.project_id_for_path(project_root)
+        conn = ctx.project_conn(project_id)
+        files_repo.insert(conn, _file("f1", "pkg/dog.py", FileKind.CODE))
+        with transaction(conn):
+            entities_repo.insert(
+                conn, _entity("e1", "Dog", "pkg.Dog", "f1"), snippet="class Dog: ..."
+            )
+
+        first = lexical.search_with_timings(ctx, "Dog")
+        second = lexical.search_with_timings(ctx, "Dog")
+        assert [t.name for t in second.timings] != ["cache_hit"]
+        assert [r.id for r in first.results] == [r.id for r in second.results]
+    finally:
+        ctx.close()
 
 
 def test_merge_deduplicates_to_best_tier(tmp_path: Path) -> None:

@@ -71,10 +71,15 @@ class SearchVectorConfig(BaseModel):
 
 
 class SearchCacheConfig(BaseModel):
-    """Phase 6's query-result cache (blueprint section 23)."""
+    """Phase 6's query-result and query-embedding caches (blueprint
+    sections 23/24) -- see ``retrieval/cache.py`` for why both are only
+    ever useful in a long-lived process (``ragpilot serve``), never a
+    one-shot CLI invocation.
+    """
 
     enabled: bool = True
     max_queries: int = 256
+    max_query_embeddings: int = 256
 
 
 class SearchConfig(BaseModel):

@@ -37,6 +37,7 @@ from ragpilot.core.config import SearchConfig
 from ragpilot.core.lifecycle import AppContext
 from ragpilot.core.models import EmbeddingSubjectType
 from ragpilot.retrieval import ann, embedder, vectorstore
+from ragpilot.retrieval import cache as search_cache
 from ragpilot.storage.repositories import (
     documents_repo,
     embeddings_repo,
@@ -189,6 +190,20 @@ def _search_source_via_ann(
     return hits
 
 
+def _embed_query_cached(query: str, *, config: SearchConfig) -> list[float] | None:
+    """A cached query embedding (blueprint section 24), or ``None`` on a
+    cache miss/disabled cache -- the caller falls back to
+    ``embedder.embed_texts`` and stores the result itself, since only it
+    knows whether that call actually succeeded.
+    """
+    if not config.cache.enabled:
+        return None
+    embedding_cache = search_cache.get_query_embedding_cache(config.cache.max_query_embeddings)
+    return embedding_cache.get(
+        search_cache.embedding_cache_key(query=query, model_id=embedder.EMBEDDING_MODEL_ID)
+    )
+
+
 def semantic_search(
     ctx: AppContext,
     query: str,
@@ -216,12 +231,22 @@ def semantic_search(
     if not query:
         return SemanticSearchResult(available=True, reason="empty query", results=())
 
-    try:
-        query_vector = embedder.embed_texts([query])[0]
-    except embedder.EmbeddingModelUnavailableError as exc:
-        return SemanticSearchResult(
-            available=False, reason=f"embedding model unavailable: {exc}", results=()
-        )
+    query_vector = _embed_query_cached(query, config=config)
+    if query_vector is None:
+        try:
+            query_vector = embedder.embed_texts([query])[0]
+        except embedder.EmbeddingModelUnavailableError as exc:
+            return SemanticSearchResult(
+                available=False, reason=f"embedding model unavailable: {exc}", results=()
+            )
+        if config.cache.enabled:
+            embedding_cache = search_cache.get_query_embedding_cache(
+                config.cache.max_query_embeddings
+            )
+            embedding_cache.set(
+                search_cache.embedding_cache_key(query=query, model_id=embedder.EMBEDDING_MODEL_ID),
+                query_vector,
+            )
 
     k = candidate_k if candidate_k is not None else limit
     model_id = embedder.EMBEDDING_MODEL_ID
