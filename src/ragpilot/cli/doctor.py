@@ -41,7 +41,11 @@ class CheckSection:
     checks: list[CheckResult]
 
 
-def _overall(sections: list[CheckSection]) -> str:
+def overall_status(sections: list[CheckSection]) -> str:
+    """Public: reused by ``ragpilot upgrade`` (``ops/upgrade.py``) to run
+    the exact same post-upgrade health verdict as ``ragpilot doctor``
+    rather than reimplementing it.
+    """
     statuses = {check.status for section in sections for check in section.checks}
     if "fail" in statuses:
         return "UNHEALTHY"
@@ -160,7 +164,7 @@ def _sections_to_json(sections: list[CheckSection], overall: str) -> dict[str, A
 def doctor(json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
     with AppContext.bootstrap() as ctx:
         sections = run_checks(ctx)
-        overall = _overall(sections)
+        overall = overall_status(sections)
         if json_output:
             print_json(_sections_to_json(sections, overall))
         else:
@@ -173,7 +177,7 @@ def doctor(json_output: Annotated[bool, typer.Option("--json")] = False) -> None
 def health(json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
     with AppContext.bootstrap() as ctx:
         sections = run_checks(ctx)
-        overall = _overall(sections)
+        overall = overall_status(sections)
         if json_output:
             print_json({"result": overall})
         else:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import typer
 
 from ragpilot.cli import (
+    backup,
     callees,
     callers,
     config_cmd,
@@ -17,12 +18,15 @@ from ragpilot.cli import (
     init,
     install_agent,
     link,
+    rebuild,
     references,
+    restore,
     search,
     serve,
     source,
     status,
     symbol,
+    upgrade,
     version_cmd,
     watch,
 )
@@ -60,6 +64,18 @@ app.command("watch", help="Run the indexing daemon in the foreground.")(watch.wa
 app.command(
     "install-agent", help="Print (and optionally write) the MCP client config snippet."
 )(install_agent.install_agent)
+app.command("backup", help="Create a restorable backup archive of RAGpilot's databases.")(
+    backup.backup
+)
+app.command("restore", help="Restore RAGpilot's databases from a backup archive.")(
+    restore.restore
+)
+app.command("rebuild", help="Wipe and re-index one or every source's derived knowledge.")(
+    rebuild.rebuild
+)
+app.command("upgrade", help="Apply pending schema migrations, backing up first if needed.")(
+    upgrade.upgrade
+)
 
 
 if __name__ == "__main__":

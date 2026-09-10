@@ -10,8 +10,8 @@ This repository is being built out in sequential, independently mergeable phases
 4. Unified Knowledge Model — entity normalization, cross-domain (code <-> docs) linking, confidence/evidence model
 5. Retrieval — search, callers/callees, references, impact analysis, explore, query planner, context builder
 6. MCP Server — stdio MCP server and agent-facing tools
-7. Incremental Runtime (this repository's current state) — daemon, file watchers, polling, reconciliation, crash recovery
-8. Operations — backup/restore, upgrade/rollback, metrics, packaging, release integrity
+7. Incremental Runtime — daemon, file watchers, polling, reconciliation, crash recovery
+8. Operations (this repository's current state) — backup/restore, upgrade/rollback, metrics, packaging, release integrity
 9. Optional Intelligence — vector retrieval, reranking, local embeddings, LLM provider abstraction
 
 See `CONTRIBUTING.md` for development setup and `SECURITY.md` for the security policy.
@@ -41,6 +41,10 @@ ragpilot watch
 ragpilot daemon start
 ragpilot daemon status --json
 ragpilot daemon stop
+ragpilot backup
+ragpilot upgrade
+ragpilot rebuild --source SOURCE_ID
+ragpilot restore ~/.ragpilot/backups/ragpilot-backup-<timestamp>.tar.gz
 ```
 
 Phase 1 shipped the CLI, layered configuration, the source registry, SQLite
@@ -124,7 +128,7 @@ client such as Claude Desktop/Claude Code -- it never discovers or edits
 a real client config file on its own, only prints (and, with `--write`,
 writes to the exact path given).
 
-Phase 7 (this repository's current state) adds the incremental runtime:
+Phase 7 adds the incremental runtime:
 `ragpilot watch` runs a daemon in the foreground (`ragpilot daemon
 start|stop|restart|status [--json]` runs the same loop detached in the
 background) that watches every enabled source -- local roots via native
@@ -146,6 +150,34 @@ by `ragpilot source list|info` and, as a WARN rather than a failure, by
 `ragpilot doctor`) with every existing file/entity/document left
 untouched, and flips back to `active` -- reconciling for real -- the
 moment the root is reachable again.
+
+Phase 8 (this repository's current state) adds operations: `ragpilot
+backup [PATH]` takes an online, consistent snapshot (SQLite's own backup
+API, not a raw file copy) of `sources.db` and every project's
+`knowledge.db` into one `.tar.gz` archive with a manifest -- never the
+original source files, which stay the user's own data on disk. `ragpilot
+restore ARCHIVE` verifies the archive and its schema versions, stops a
+running daemon, extracts and integrity-checks every database in a temp
+location, and only then atomically swaps it into place (a corrupted or
+incompatible archive is refused before anything live is touched).
+`ragpilot rebuild [--source ID]` wipes one or every source's
+`knowledge.db` and re-indexes it from scratch through the same pipeline
+`ragpilot index` uses -- the blueprint's "source files = truth, RAGpilot
+DB = rebuildable derived state" principle, runnable on demand. `ragpilot
+upgrade` checks every database for pending schema migrations, takes an
+automatic backup only when one is actually pending, applies migrations
+through the existing (Phase 1) migration system, and reuses `ragpilot
+doctor`'s health check to report the result -- there is no automatic
+rollback of an already-applied migration; the pre-upgrade backup is the
+documented recovery path. `ragpilot status --json` also reports real
+metrics (symbol/relationship/document counts, database size, queue
+depth) alongside the existing indexing summary. Packaging/release
+integrity is scoped to what this environment can do honestly:
+`scripts/generate_release_artifacts.py` and a tag-triggered
+`.github/workflows/release.yml` build the sdist/wheel, a checksum file,
+and a plain dependency manifest -- clearly labeled **unsigned**, since no
+code-signing infrastructure exists here; a standalone multi-platform
+executable bundle is out of scope for this phase.
 
 ## Design principles
 

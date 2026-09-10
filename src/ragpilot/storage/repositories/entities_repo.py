@@ -90,6 +90,15 @@ def get(conn: sqlite3.Connection, entity_id: str) -> Entity | None:
     return _row_to_entity(row) if row is not None else None
 
 
+def count_all(conn: sqlite3.Connection) -> int:
+    """Total entity count -- backs ``status --json``'s ``symbols_created``
+    metric (Phase 8). A plain ``COUNT(*)`` rather than ``len(list_all())``
+    so a large project doesn't pay to materialize every row just to size it.
+    """
+    row = conn.execute("SELECT COUNT(*) AS n FROM entities").fetchone()
+    return int(row["n"])
+
+
 def list_all(conn: sqlite3.Connection) -> list[Entity]:
     """Every entity in this project's ``knowledge.db`` -- the "full
     existing corpus" side of ``knowledge/linker.py``'s cross-domain match

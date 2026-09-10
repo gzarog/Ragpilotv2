@@ -50,6 +50,13 @@ def insert(conn: sqlite3.Connection, relationship: Relationship) -> None:
     )
 
 
+def count_all(conn: sqlite3.Connection) -> int:
+    """Total relationship count -- backs ``status --json``'s
+    ``relationships_created`` metric (Phase 8)."""
+    row = conn.execute("SELECT COUNT(*) AS n FROM relationships").fetchone()
+    return int(row["n"])
+
+
 def list_by_file(conn: sqlite3.Connection, file_id: str) -> list[Relationship]:
     rows = conn.execute(
         "SELECT * FROM relationships WHERE file_id = ? ORDER BY id", (file_id,)

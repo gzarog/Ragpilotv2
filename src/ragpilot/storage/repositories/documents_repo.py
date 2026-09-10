@@ -279,6 +279,13 @@ def list_all_units(conn: sqlite3.Connection) -> list[DocumentUnit]:
     return [_row_to_unit(row) for row in rows]
 
 
+def count_all(conn: sqlite3.Connection) -> int:
+    """Total document count -- backs ``status --json``'s
+    ``documents_processed`` metric (Phase 8)."""
+    row = conn.execute("SELECT COUNT(*) AS n FROM documents").fetchone()
+    return int(row["n"])
+
+
 def get_document(conn: sqlite3.Connection, document_id: str) -> Document | None:
     row = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
     return _row_to_document(row) if row is not None else None
