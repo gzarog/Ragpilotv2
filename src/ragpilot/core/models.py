@@ -116,3 +116,85 @@ class ScannedFile(BaseModel):
     path: str
     size: int
     mtime: float
+
+
+class EntityType(StrEnum):
+    """Code entity kinds populated by Phase 2 extraction.
+
+    ``Repository`` and ``Project`` from the blueprint's entity menu are
+    deliberately not included: Phase 1's source/file tables already anchor
+    project scope (one source == one ``knowledge.db``), so a redundant
+    entity for it would carry no information yet. They can be added once a
+    later phase needs multi-project-per-repository structure.
+    """
+
+    NAMESPACE = "namespace"
+    CLASS = "class"
+    INTERFACE = "interface"
+    STRUCT = "struct"
+    ENUM = "enum"
+    FUNCTION = "function"
+    METHOD = "method"
+    PROPERTY = "property"
+    FIELD = "field"
+
+
+class RelationshipType(StrEnum):
+    CALLS = "calls"
+    IMPLEMENTS = "implements"
+    EXTENDS = "extends"
+    IMPORTS = "imports"
+    REFERENCES = "references"
+    CONTAINS = "contains"
+    DEFINED_IN = "defined_in"
+
+
+class Confidence(StrEnum):
+    """Confidence tiers for a resolved relationship.
+
+    Ordered roughly EXACT > HIGH > MEDIUM > HEURISTIC, but the axis is not
+    purely "how sure are we" -- HEURISTIC specifically marks a relationship
+    inferred by a framework-pattern heuristic (``framework_rules.py``)
+    rather than a generic language fact, and is never assigned to a plain
+    AST-derived edge even an unresolved one. See ``code/resolver.py`` for
+    the exact rule each tier maps to.
+    """
+
+    EXACT = "exact"
+    HIGH = "high"
+    MEDIUM = "medium"
+    HEURISTIC = "heuristic"
+
+
+class Entity(BaseModel):
+    id: str
+    source_id: str
+    file_id: str
+    kind: EntityType
+    name: str
+    qualified_name: str
+    language: str
+    parent_id: str | None = None
+    signature: str | None = None
+    start_line: int
+    end_line: int
+    start_col: int = 0
+    end_col: int = 0
+    generation: int
+    created_at: str
+    updated_at: str
+
+
+class Relationship(BaseModel):
+    id: str
+    relationship_type: RelationshipType
+    source_entity_id: str
+    target_entity_id: str | None = None
+    target_symbol: str | None = None
+    resolver: str
+    confidence: Confidence
+    file_id: str
+    source_location: str | None = None
+    evidence: str | None = None
+    generation: int
+    created_at: str

@@ -28,7 +28,10 @@ class Migration:
 
 MIGRATIONS: dict[DatabaseKind, tuple[Migration, ...]] = {
     "sources": (Migration(1, "initial_schema", schema.SOURCES_DB_V1),),
-    "knowledge": (Migration(1, "initial_schema", schema.KNOWLEDGE_DB_V1),),
+    "knowledge": (
+        Migration(1, "initial_schema", schema.KNOWLEDGE_DB_V1),
+        Migration(2, "code_intelligence", schema.KNOWLEDGE_DB_V2),
+    ),
 }
 
 
