@@ -96,9 +96,10 @@ A [Docling](https://github.com/docling-project/docling)-backed pipeline converts
 After indexing, RAGpilot connects code entities to the documents that describe them — matching on exact/qualified identifiers, filenames, and HTTP route mentions, each scored on the same confidence ladder as the code graph. `ragpilot link add|remove|list` lets you inspect the link graph and pin or remove a mapping by hand; automated linking never overrides an explicit one.
 
 ### Search & retrieval
-- `ragpilot search QUERY` — ranked lexical search merging exact/qualified-symbol matches, full-text hits, and document title/heading matches.
+- `ragpilot search QUERY` — ranked lexical search merging exact/qualified-symbol matches, alias matches, indexed path hits, and full-text/document title/heading matches, all backed by indexed lookups (no full-corpus scans). Add `--explain` for a per-stage timing breakdown and the classified query kind/confidence, or `--hybrid` for one merged, reranked view of lexical and semantic results (semantic score never outranks a lexical match).
 - `ragpilot explore "QUERY"` — the primary retrieval command: a deterministic query planner picks the right strategies (symbol lookup, graph traversal, full-text, document links) for the question and assembles a budgeted, deduplicated evidence package.
 - `ragpilot impact SYMBOL` — a symbol's defining location, callers/callees, linked documents, a naming-convention "tests" heuristic, and a LOW/MEDIUM/HIGH blast-radius bucket.
+- `ragpilot vectors rebuild [--source ID]` — rebuilds the semantic-search ANN index from scratch; `ragpilot doctor` reports which backend is active and how many vectors it holds.
 
 ### MCP server (agent integration)
 `ragpilot serve --mcp` starts a stdio MCP server exposing `ragpilot_explore`, `ragpilot_search`, `ragpilot_symbol`, `ragpilot_callers`, `ragpilot_callees`, `ragpilot_impact`, `ragpilot_documents`, `ragpilot_status`, and `ragpilot_ask` — each a thin wrapper over the same functions backing the CLI, so an agent sees exactly what you'd see at the terminal. Responses are versioned, bounded in size, and every call has a configurable timeout. `ragpilot install-agent [--write PATH]` prints the config snippet needed to register RAGpilot with a client like Claude Code — it only prints/writes, it never edits a client's config file on its own.
@@ -114,7 +115,7 @@ After indexing, RAGpilot connects code entities to the documents that describe t
 
 ### Optional: semantic search & AI-assisted answers
 Everything above works fully offline with no LLM. Two opt-in extras layer on top:
-- **Semantic search** (`ragpilot config set search.semantic true`): local sentence embeddings (no network once the model is cached) surface similarity-based results as their own clearly lower-confidence tier, never mixed into exact/graph matches.
+- **Semantic search** (`ragpilot config set search.semantic true`): local sentence embeddings (no network once the model is cached) surface similarity-based results as their own clearly lower-confidence tier, never mixed into exact/graph matches. Backed by a persistent local ANN index (`usearch`, auto-falling back to a pure-Python scan if unavailable) for large knowledge bases, updated incrementally as you index.
 - **`ragpilot ask "QUESTION"`**: runs the same deterministic retrieval as `explore`, then hands the question and that evidence to a configured LLM provider (OpenAI, Anthropic, Ollama, or any OpenAI-compatible endpoint) for a synthesized, evidence-grounded answer. Cloud providers require explicitly opting in (`privacy.external_ai_allowed: true`); a local Ollama endpoint is exempt only when it actually resolves to loopback.
 
 ## Configuration
