@@ -950,3 +950,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     *every* file of that type. Changed to AND: a multi-token path query
     now means "these tokens together," which a single-token query (the
     common case) behaves identically under either way.
+
+- Search Performance Redesign, follow-up: query-kind-aware stage routing
+  (blueprint section 15, deferred by `query_classifier.py`'s own original
+  docstring). `retrieval/lexical.py`'s `search_with_timings` now uses
+  `query_classifier.classify_query`'s `QueryKind` to skip stages a query's
+  shape makes very unlikely to contribute: a SYMBOL-shaped query
+  (`SettlementService`) only runs entity search; a PATH-shaped query
+  (`settlement_service.py`) adds path search but not documents; KEYWORD/
+  CONCEPTUAL queries add document search but not paths. Entity search
+  always runs regardless of kind -- a PATH- or KEYWORD-shaped query can
+  still legitimately name a real symbol (`benchmarks/search/
+  golden_queries.yaml`'s `settlement_service.py` case expects both a path
+  hit and the entity defined in that file), so this is deliberately
+  narrower than the blueprint's literal per-kind tables rather than a
+  strict transcription of them. `ragpilot search --explain` already
+  surfaced `query_kind`; its `stages` list now reflects which stages
+  actually ran for that kind instead of always listing all three.

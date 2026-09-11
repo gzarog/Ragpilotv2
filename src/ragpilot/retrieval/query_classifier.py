@@ -7,10 +7,11 @@ or a model load, so calling this on every search is free.
 Two independent, small pieces of information, each with exactly one
 consumer:
 
-* ``classify_query`` -- ``QueryKind`` is currently diagnostic-only (see
-  ``ragpilot search --explain``), a first step toward the blueprint's
-  full per-kind strategy routing (section 4) without yet rewiring which
-  strategies ``retrieval/lexical.py`` runs for which kind.
+* ``classify_query`` -- ``QueryKind`` drives ``retrieval/lexical.py``'s
+  per-kind stage routing (blueprint sections 4/15: e.g. a PATH-shaped
+  query skips the document-search stage, a SYMBOL-shaped query skips
+  both document and path search) and is also surfaced diagnostically via
+  ``ragpilot search --explain``.
 * ``estimate_confidence`` -- ``SearchConfidence`` is what ``cli/search.py``
   uses to decide whether semantic search is worth running at all, when
   ``search.lazy_semantic`` is on (blueprint sections 18/19).

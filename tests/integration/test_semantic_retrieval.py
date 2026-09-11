@@ -264,7 +264,9 @@ def test_explain_reports_per_stage_timings(
     explain = payload["explain"]
     assert explain["query_kind"] == "symbol"
     stage_names = {stage["stage"] for stage in explain["stages"]}
-    assert {"entities", "documents", "paths", "merge"} <= stage_names
+    # SYMBOL-shaped queries route to entities only (blueprint section 15
+    # -- documents/paths are skipped, see retrieval/lexical.py).
+    assert {"entities", "merge"} <= stage_names
     assert explain["total_ms"] >= 0
 
     text_result = runner.invoke(app, ["search", "AnimalService", "--explain"])

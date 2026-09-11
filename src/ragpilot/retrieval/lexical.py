@@ -340,6 +340,10 @@ def search_with_timings(
     if cache_config.enabled:
         started = time.perf_counter()
         result_cache = search_cache.get_search_result_cache(cache_config.max_queries)
+        # "lexical" mode is enough on its own (not e.g. "lexical:symbol"):
+        # which stages ran below is a pure function of ``query`` itself,
+        # so two calls with the same query always route identically and
+        # would compute the same cache key regardless.
         cache_key = search_cache.search_cache_key(
             query=query, mode="lexical", limit=limit, connections=[c for _, _, c in connections]
         )
@@ -351,6 +355,25 @@ def search_with_timings(
                 timings=[StageTiming(name="cache_hit", hits=len(cached), duration_ms=elapsed_ms)],
             )
 
+    # Blueprint section 15's routing table, applied to skip stages a
+    # query's shape makes very unlikely to contribute (deferred since
+    # QueryKind was introduced -- see query_classifier's module
+    # docstring). Deliberately narrower than the blueprint's literal
+    # per-kind tables: entities always run (a PATH- or KEYWORD-shaped
+    # query can still name a real symbol, e.g. "settlement_service.py"
+    # legitimately surfacing the entity defined in that file -- pinned by
+    # benchmarks/search/golden_queries.yaml), and only the two stages
+    # each kind's own routing table never lists get skipped: paths for
+    # everything except PATH itself, and documents for SYMBOL/PATH.
+    # Deferred import: query_classifier imports RankTier/SearchResult
+    # from this module, so importing it back at module scope here would
+    # be circular.
+    from ragpilot.retrieval.query_classifier import QueryKind, classify_query
+
+    query_kind = classify_query(query)
+    run_documents = query_kind in (QueryKind.KEYWORD, QueryKind.CONCEPTUAL)
+    run_paths = query_kind is QueryKind.PATH
+
     stopwatch = _StopwatchTimings()
     collected: list[SearchResult] = []
     for source_id, _source_path, conn in connections:
@@ -359,15 +382,17 @@ def search_with_timings(
         stopwatch.record("entities", started, entity_hits)
         collected.extend(entity_hits)
 
-        started = time.perf_counter()
-        document_hits = _search_documents(conn, source_id, query, limit)
-        stopwatch.record("documents", started, document_hits)
-        collected.extend(document_hits)
+        if run_documents:
+            started = time.perf_counter()
+            document_hits = _search_documents(conn, source_id, query, limit)
+            stopwatch.record("documents", started, document_hits)
+            collected.extend(document_hits)
 
-        started = time.perf_counter()
-        path_hits = _search_paths(conn, source_id, query, limit)
-        stopwatch.record("paths", started, path_hits)
-        collected.extend(path_hits)
+        if run_paths:
+            started = time.perf_counter()
+            path_hits = _search_paths(conn, source_id, query, limit)
+            stopwatch.record("paths", started, path_hits)
+            collected.extend(path_hits)
 
     started = time.perf_counter()
     merged = _merge(collected)[:limit]

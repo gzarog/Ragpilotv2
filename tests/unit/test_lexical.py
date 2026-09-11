@@ -253,7 +253,10 @@ def test_search_with_timings_caches_and_invalidates_on_external_write(
 
         first = lexical.search_with_timings(ctx, "Dog")
         assert "e1" in [r.id for r in first.results]
-        assert {t.name for t in first.timings} >= {"entities", "documents", "paths", "merge"}
+        # "Dog" classifies as SYMBOL (blueprint section 15's routing
+        # table): only the entities stage runs, documents/paths are
+        # skipped -- see test_search_with_timings_routes_stages_by_query_kind.
+        assert {t.name for t in first.timings} == {"entities", "merge"}
 
         second = lexical.search_with_timings(ctx, "Dog")
         assert [r.id for r in second.results] == [r.id for r in first.results]
@@ -274,6 +277,47 @@ def test_search_with_timings_caches_and_invalidates_on_external_write(
 
         third = lexical.search_with_timings(ctx, "Dog")
         assert [t.name for t in third.timings] != ["cache_hit"]
+    finally:
+        ctx.close()
+
+
+def test_search_with_timings_routes_stages_by_query_kind(
+    ragpilot_home: Path, tmp_path: Path
+) -> None:
+    """Blueprint section 15: which of the entities/documents/paths stages
+    ``search_with_timings`` actually runs is a function of the query's
+    ``QueryKind`` -- SYMBOL only needs entities, PATH adds paths (not
+    documents), and KEYWORD/CONCEPTUAL add documents (not paths). Entities
+    always runs: ``settlement_service.py``-style PATH queries legitimately
+    need entity hits too (see ``benchmarks/search/golden_queries.yaml``).
+    """
+    ctx = AppContext.bootstrap(
+        home=ragpilot_home, cwd=tmp_path, cli_overrides={"search": {"cache": {"enabled": False}}}
+    )
+    try:
+        project_root = tmp_path / "proj"
+        project_root.mkdir()
+        registry = SourceRegistry(ctx.sources_conn, home=ctx.home)
+        registry.add(str(project_root))
+        from ragpilot.core import paths
+
+        project_id = paths.project_id_for_path(project_root)
+        conn = ctx.project_conn(project_id)
+        files_repo.insert(conn, _file("f1", "pkg/dog.py", FileKind.CODE))
+        with transaction(conn):
+            entities_repo.insert(
+                conn, _entity("e1", "Dog", "pkg.Dog", "f1"), snippet="class Dog: ..."
+            )
+
+        cases = {
+            "Dog": {"entities", "merge"},  # SYMBOL
+            "dog.py": {"entities", "paths", "merge"},  # PATH
+            "cholesterol": {"entities", "documents", "merge"},  # KEYWORD
+            "how are dogs treated for illness": {"entities", "documents", "merge"},  # CONCEPTUAL
+        }
+        for query, expected_stages in cases.items():
+            timed = lexical.search_with_timings(ctx, query)
+            assert {t.name for t in timed.timings} == expected_stages, query
     finally:
         ctx.close()
 
