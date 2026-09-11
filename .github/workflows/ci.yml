@@ -280,25 +280,31 @@ jobs:
           if ($info.install_method -ne "install-script") { throw "unexpected install_method: $($info.install_method)" }
       # Regression test for the Windows self-upgrade bug `ragpilot update
       # install` hits: it re-runs this same install.ps1 from inside the
-      # currently-running venv\Scripts\ragpilot.exe. Simulate that file
-      # being locked by holding an exclusive-write file handle on it (the
-      # same sharing violation a running PE image causes) across a second
-      # install.ps1 run, and confirm the run still succeeds and the CLI
-      # still works afterward -- proving the side-by-side-venv-then-rename
-      # swap in install.ps1 doesn't need that file to be free.
-      - name: Re-run install.ps1 while the installed exe is locked (self-upgrade simulation)
+      # currently-running venv\Scripts\ragpilot.exe. `ragpilot daemon
+      # start` spawns a real, detached background process from that exact
+      # venv (python.exe, per service loop `cli/daemon.py`'s `_spawn`)
+      # and waits for it to report healthy before returning -- a
+      # genuinely-executing process, not a synthetic file lock (an
+      # earlier version of this test used
+      # `[System.IO.File]::Open(..., FileShare.Read)`, which is *more*
+      # restrictive than what Windows actually grants a running PE image
+      # and produced a false failure here). Re-running install.ps1 while
+      # that daemon is alive and confirming both the run and the
+      # resulting CLI still work is the real proof that the rename-based
+      # swap in install.ps1 doesn't need the venv's files to be free.
+      - name: Re-run install.ps1 while a real background process holds the venv open (self-upgrade simulation)
         env:
           RAGPILOT_REF: ${{ github.head_ref || github.ref_name }}
           RAGPILOT_INSTALL_DIR: ${{ runner.temp }}\ragpilot-install
           RAGPILOT_BIN_DIR: ${{ runner.temp }}\ragpilot-bin
           RAGPILOT_HOME: ${{ runner.temp }}\ragpilot-home
         run: |
-          $exePath = "${{ runner.temp }}\ragpilot-install\venv\Scripts\ragpilot.exe"
-          $lock = [System.IO.File]::Open($exePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+          & "${{ runner.temp }}\ragpilot-bin\ragpilot.cmd" daemon start
+          if ($LASTEXITCODE -ne 0) { throw "daemon start failed" }
           try {
               ./install.ps1
           } finally {
-              $lock.Dispose()
+              & "${{ runner.temp }}\ragpilot-bin\ragpilot.cmd" daemon stop
           }
       - name: Verify the installed CLI still works after the locked re-run
         env:
