@@ -1305,3 +1305,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   second -- application removal never touches `RAGPILOT_HOME`, so the
   reverse order has no equivalent risk. Covered by a new test asserting
   the call order directly.
+
+- `ragpilot search`: document hits now render as match-centered snippet
+  blocks by default (a real usability gap -- there was previously no way
+  to see *why* a document matched without a separate `--json` round
+  trip and manual truncated-text guesswork):
+  ```
+  PDF: 1177646_0076000_1.pdf
+  Page: 2
+  Match:
+  HDL Cholesterol .......... 51 mg/dL
+  ```
+  - The snippet itself is real: SQLite FTS5's own `snippet()` function
+    (`documents_repo.search_fts_projection`), auto-picking whichever
+    indexed column (`heading_text`/`body`/`doc_title`) actually matched
+    and bounding the excerpt to `search.output.snippet_max_tokens`
+    (default 32, clamped to FTS5's own 1-64 limit) -- replacing the
+    previous naive `(body or heading)[:280]` character slice, which
+    would silently return unrelated leading text instead of the actual
+    match for anything past the first ~280 characters of a paragraph.
+    This also upgrades every other consumer of `SearchResult.snippet`
+    (`--json`, the MCP `ragpilot_search` tool, `--hybrid`), not just the
+    new block rendering.
+  - Page number (PDF/DOCX/PPTX, `document_sections.page_start`/
+    `page_end`, now joined into the FTS query and `SearchResult.location`
+    for the first time) or heading path (Markdown/HTML/plain text, which
+    have no page concept) is shown alongside the excerpt, whichever the
+    format actually has.
+  - `--snippets` forces this mode explicitly; `--table` reverts to the
+    single title/path/tier table every result kind shared before this
+    existed. Code/entity hits are unaffected either way -- they always
+    render via that same plain table row, confirmed as out of scope for
+    this change (a source-code snippet is a different feature).
+  - The default mode, and what one document hit falls back to when it
+    has no real match snippet (an exact-title hit with no FTS row),
+    are both driven by the same new `search.output.fallback` config
+    list (`SearchOutputConfig`, `["snippets", "json", "files"]` out of
+    the box) -- "configurable fallback" has one meaning, not two.
+    `ragpilot config set search.output.fallback json,files` (or hand-edit
+    `config.yaml`); `ragpilot config set` learned to coerce a
+    comma-separated value into a list for this (the only list-typed
+    config field so far).
+  - Fixed in the same change: `cli/_common.py`'s `print_json` was calling
+    `json.dumps` without `ensure_ascii=False`, so any non-ASCII indexed
+    content (a real report against a live install: Greek lab-report
+    text) came out as unreadable `\uXXXX` escapes in every `--json`
+    command's output, not just `search` -- the underlying extracted text
+    was always correct; only its terminal rendering was broken.
