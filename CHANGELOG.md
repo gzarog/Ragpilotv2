@@ -1217,3 +1217,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     checkout with only the `ragpilot_0_1_0` tag reachable now builds a
     `0.0.1.dev<N>+g<sha>` dev version instead of failing outright; a
     clean `v0.1.0` tag at HEAD still builds exactly `ragpilot-0.1.0`.
+
+- `ragpilot uninstall [--keep-data] [--yes] [--json]`: removes the
+  installed application and, by default, all of its data.
+  - Reuses `update/installer.py`'s `detect_install_method` (the same
+    "how was this installed" question `ragpilot update install` already
+    answers) to dispatch application removal: `pip uninstall -y
+    ragpilot`, `pipx uninstall ragpilot`, or -- for an install-script
+    install -- deleting exactly `venv_dir` and `install_dir/app` plus the
+    one launcher file in `bin_dir`, read from `install_info.json`. Never
+    the whole `install_dir` (it can share a parent directory with
+    `RAGPILOT_HOME` by default) and never anything else that happens to
+    live alongside the launcher in the shared `bin_dir`. An editable/dev
+    install or an undetectable method is never auto-removed -- clear
+    manual instructions are reported instead, independent of whether data
+    was purged.
+  - Data purge (default; `--keep-data` skips it): stops a running daemon
+    first, then deletes `RAGPILOT_HOME` entirely -- the same pre-delete
+    safety step `ops/restore.py` already took before swapping in a
+    backup, now shared via a new `service/pid.py` helper
+    (`stop_and_wait`) rather than duplicated a second time.
+  - Prompts for confirmation (listing exactly what will be deleted)
+    before touching anything, unless `--yes`/`-y` is given.
+  - On Windows, an install-script uninstall's file removal is a
+    short-lived, fully detached process that waits for this process to
+    exit first (the same reason `ragpilot update install`'s upgrade step
+    launches a separate process) -- deleting files this running
+    interpreter has open can fail outright on Windows, unlike POSIX,
+    where a direct, synchronous removal is reliable.
+  - Manually verified end to end in this sandbox: declining the prompt
+    leaves everything untouched; `--yes` purges data and correctly
+    reports manual removal instructions for this sandbox's own editable
+    install; a real running daemon is stopped (confirmed via `ps`) before
+    its data directory is deleted; `--keep-data` leaves `RAGPILOT_HOME`
+    in place.
