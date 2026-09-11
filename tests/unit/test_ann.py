@@ -7,6 +7,7 @@ the blueprint's engine-selection, incremental-update and rebuild rules
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -69,6 +70,52 @@ def test_select_backend_auto_prefers_usearch(tmp_path: Path) -> None:
     index, backend = ann.select_backend("auto", ndim=4, index_path=tmp_path / "v.usearch")
     assert backend == "usearch"
     assert isinstance(index, ann.USearchAnnIndex)
+
+
+def test_get_cached_backend_reuses_instance_when_file_unchanged(tmp_path: Path) -> None:
+    index_path = tmp_path / "vectors.usearch"
+    written = ann.USearchAnnIndex(ndim=3, path=index_path)
+    written.add([1], [[1.0, 0.0, 0.0]])
+    written.save()
+
+    first, backend1 = ann.get_cached_backend("auto", ndim=3, index_path=index_path)
+    second, backend2 = ann.get_cached_backend("auto", ndim=3, index_path=index_path)
+    assert backend1 == "usearch"
+    assert backend2 == "usearch"
+    assert first is second
+
+
+def test_get_cached_backend_reloads_after_the_file_changes(tmp_path: Path) -> None:
+    index_path = tmp_path / "vectors.usearch"
+    written = ann.USearchAnnIndex(ndim=3, path=index_path)
+    written.add([1], [[1.0, 0.0, 0.0]])
+    written.save()
+
+    first, _ = ann.get_cached_backend("auto", ndim=3, index_path=index_path)
+    assert len(first) == 1
+
+    # Simulate a rebuild/sync (in this process or another): more vectors
+    # added and saved, with the file's mtime bumped forward by a full
+    # second so the assertion is immune to filesystem timestamp
+    # granularity -- the cache must notice the on-disk index moved on.
+    rebuilt = ann.USearchAnnIndex(ndim=3, path=index_path)
+    rebuilt.add([1, 2], [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    rebuilt.save()
+    stat = index_path.stat()
+    os.utime(index_path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+
+    second, _ = ann.get_cached_backend("auto", ndim=3, index_path=index_path)
+    assert second is not first
+    assert len(second) == 2
+
+
+def test_get_cached_backend_never_caches_bruteforce(tmp_path: Path) -> None:
+    index_path = tmp_path / "does-not-exist.usearch"
+    first, backend1 = ann.get_cached_backend("bruteforce", ndim=3, index_path=index_path)
+    second, backend2 = ann.get_cached_backend("bruteforce", ndim=3, index_path=index_path)
+    assert backend1 == "bruteforce"
+    assert backend2 == "bruteforce"
+    assert first is not second
 
 
 def _seed_vector_items(conn, *, file_id: str, count: int, model_id: str = MODEL) -> list[int]:

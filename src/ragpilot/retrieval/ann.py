@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import sqlite3
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Protocol
@@ -198,6 +199,72 @@ def select_backend(
                 error=str(exc),
             )
         return BruteForceAnnIndex(), "bruteforce"
+
+
+# Process-local cache of a *loaded* on-disk index, keyed by
+# (index_path, engine, ndim) -> (index_file's mtime_ns when loaded,
+# AnnIndex, backend). One-shot CLI processes populate and immediately
+# discard this on exit, same as retrieval/cache.py's caches -- the real
+# beneficiary is a long-lived process serving repeated searches
+# (``ragpilot serve``), for which reloading ``vectors.usearch`` from
+# disk on every single semantic_search() call would otherwise undo the
+# blueprint's "daemon keeps ANN indexes in memory" goal (section 25).
+# Unbounded: unlike a query-result cache, this is keyed by project
+# index-file identity, which is bounded by how many sources a process
+# ever searches, not by arbitrary query text.
+_index_cache_lock = threading.Lock()
+_index_cache: dict[tuple[str, str, int], tuple[int, AnnIndex, str]] = {}
+
+
+def _index_mtime_ns(index_path: Path) -> int:
+    try:
+        return index_path.stat().st_mtime_ns
+    except OSError:
+        return -1
+
+
+def get_cached_backend(engine: str, *, ndim: int, index_path: Path) -> tuple[AnnIndex, str]:
+    """Read-only counterpart to ``select_backend`` for the *search* path
+    only (``retrieval/semantic.py``): reuses a previously loaded index
+    for this exact ``(index_path, engine, ndim)`` as long as the on-disk
+    file's mtime hasn't changed since it was cached, instead of
+    re-reading and re-deserializing it from disk on every call.
+
+    Never used by the write path (``rebuild_index``/``sync_index_for_files``):
+    those already load once, mutate, and save within a single call --
+    there is nothing to cache there, and reusing a cached instance would
+    risk mutating a copy some concurrent search is still reading.
+
+    Only a ``"usearch"`` result actually gets cached. A ``"bruteforce"``
+    result -- whether ``engine`` was explicitly ``"bruteforce"``, or
+    ``select_backend`` fell back internally because ``usearch`` itself
+    couldn't load -- has no on-disk file of its own to key a cache on:
+    its caller reseeds it from ``vector_items`` on every call when
+    empty, and ``BruteForceAnnIndex.save()`` is a no-op that never
+    touches ``index_path``, so caching it here by that path's mtime
+    would freeze whatever it was first seeded with across every later
+    call in this process, even as ``vector_items`` keeps changing.
+
+    Invalidation: every writer finishes with ``USearchAnnIndex.save``'s
+    atomic tmp-file-then-``os.replace``, which always bumps the file's
+    mtime, so a cache entry from before a rebuild/sync (in this process
+    or another) never gets served after one -- the next call's mtime
+    check misses and reloads.
+    """
+    key = (str(index_path), engine, ndim)
+    current_mtime = _index_mtime_ns(index_path)
+    with _index_cache_lock:
+        cached = _index_cache.get(key)
+        if cached is not None and cached[0] == current_mtime:
+            return cached[1], cached[2]
+
+    index, backend = select_backend(engine, ndim=ndim, index_path=index_path)
+    if backend != "usearch":
+        return index, backend
+
+    with _index_cache_lock:
+        _index_cache[key] = (current_mtime, index, backend)
+    return index, backend
 
 
 def _read_meta(meta_path: Path) -> dict[str, Any] | None:
