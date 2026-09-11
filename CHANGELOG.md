@@ -1352,3 +1352,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     text) came out as unreadable `\uXXXX` escapes in every `--json`
     command's output, not just `search` -- the underlying extracted text
     was always correct; only its terminal rendering was broken.
+
+- Fixed `ragpilot index` crashing with `Error: UNIQUE constraint failed:
+  files.source_id, files.path` on a brand-new source's very first index
+  run -- reported live on Windows against a real repo layout. Two
+  independent gaps combined: (1) `sources/scanner.py`'s `scan()` had no
+  intra-run deduplication, so the same real file could be yielded twice
+  in one pass -- on Windows, an NTFS junction (`mklink /J`, common in
+  repo-sync/build-artifact layouts) is invisible to both
+  `Path.is_symlink()` and `os.walk`'s own `followlinks` (neither
+  recognizes `IO_REPARSE_TAG_MOUNT_POINT` the way they do a real
+  symlink), so a junction looping back to an already-reached directory
+  still gets walked into even with `follow_symlinks=False` (the
+  default); (2) `indexing/coordinator.py`'s `IndexCoordinator.run()`
+  checked each scanned path against `existing_by_path`, a dict snapshot
+  taken once *before* the per-file loop and never updated as new files
+  were inserted within that same run, so a duplicate scanned path was
+  misclassified as "new" a second time and crashed on the second
+  insert. Fixed at both layers: `scan()` now tracks resolved
+  directories and files it has already yielded in this pass and skips a
+  repeat (pruning a directory-level duplicate before `os.walk` ever
+  descends into it a second time, which also bounds what would
+  otherwise be unbounded recursion for a junction looping back to one
+  of its own ancestors); `IndexCoordinator.run()` now keeps
+  `existing_by_path` in sync as it inserts, so a duplicate scanned path
+  from *any* source is recognized as unchanged instead of crashing --
+  independent defense-in-depth, not reliant on the scanner fix alone.
+  Reproduced and verified with a dedicated regression test that
+  disables the coordinator's own scanner-level protection and confirms
+  the exact reported `IntegrityError` without the coordinator fix, and
+  a clean, correctly-deduplicated run with it.
