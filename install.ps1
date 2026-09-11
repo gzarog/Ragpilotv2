@@ -14,6 +14,11 @@ $InstallDir = if ($env:RAGPILOT_INSTALL_DIR) { $env:RAGPILOT_INSTALL_DIR } else 
 $AppDir = Join-Path $InstallDir "app"
 $VenvDir = Join-Path $InstallDir "venv"
 $BinDir = if ($env:RAGPILOT_BIN_DIR) { $env:RAGPILOT_BIN_DIR } else { Join-Path $InstallDir "bin" }
+# Same default as ragpilot's own core/paths.py::runtime_dir() on Windows --
+# RAGPILOT_INSTALL_DIR/RAGPILOT_HOME happen to share a default today, but
+# are independent overrides, so this is computed the same way rather than
+# assumed equal to InstallDir above.
+$RagpilotHome = if ($env:RAGPILOT_HOME) { $env:RAGPILOT_HOME } else { Join-Path $env:LOCALAPPDATA "RAGpilot" }
 
 function Find-Python {
     # Each candidate is a hashtable { Exe; Args } rather than a flat array --
@@ -121,6 +126,21 @@ if (";$UserPath;" -notlike "*;$BinDir;*") {
     Write-Host ""
     Write-Host "Added $BinDir to your user PATH. Open a new terminal for this to take effect."
 }
+
+
+# Lets `ragpilot update install` (update/installer.py) detect that this is
+# an install-script install and where to re-run this same script, rather
+# than guessing from the running interpreter's own path -- see this
+# file's own record of itself as the one thing that can't guess itself.
+New-Item -ItemType Directory -Force -Path $RagpilotHome | Out-Null
+$InstallInfo = [ordered]@{
+    install_method = "install-script"
+    repository     = $Repo
+    install_dir    = $InstallDir
+    venv_dir       = $VenvDir
+    bin_dir        = $BinDir
+}
+$InstallInfo | ConvertTo-Json | Set-Content -Path (Join-Path $RagpilotHome "install_info.json") -Encoding UTF8
 
 Write-Host ""
 Write-Host "Run 'ragpilot version' to verify, then 'ragpilot init' to get started."

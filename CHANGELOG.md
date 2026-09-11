@@ -1100,3 +1100,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     validation -- found this repository's current release tag invalid
     and silently wrote nothing, exactly the designed offline/failure
     behavior.
+
+- CLI performance improvement plan, Phase 5: `ragpilot update install`,
+  installation-method detection, and migration/health-check integration.
+  - `install.sh`/`install.ps1` now write `<RAGPILOT_HOME>/install_info.json`
+    (`install_method`, `repository`, `install_dir`, `venv_dir`, `bin_dir`)
+    after a successful install-script install -- the authoritative signal
+    `update/installer.py`'s `detect_install_method` checks before falling
+    back to runtime heuristics: a PEP 610 `direct_url.json` check for an
+    editable/dev install (`pip install -e .`), then a pipx-shaped venv
+    path, then "pip" for any other installed distribution, else "unknown".
+    CI's install-script job now also asserts that file gets written.
+  - `update/installer.py`'s `install_latest` runs this plan's full
+    sequence: check the latest release, confirm it's actually newer
+    (a no-op "already up to date" return otherwise), detect the install
+    method, run that method's upgrade command (`curl | sh`/`irm | iex`
+    re-run with `RAGPILOT_REF` set to the validated release tag for
+    install-script; `pip install --upgrade "git+...@<tag>"`; `pipx
+    install --force "git+...@<tag>"`), then -- via `sys.executable`
+    again, so this runs the *newly* upgraded code rather than the old
+    process's already-imported modules -- `ragpilot upgrade` (schema
+    migrations) and `ragpilot doctor` (health check), reusing those
+    existing commands rather than duplicating their logic. An editable/
+    dev install or an undetectable method refuses with clear manual
+    instructions instead of guessing. The release tag only ever reaches a
+    subprocess via an environment variable or as one non-shell-interpreted
+    argv element, never interpolated into a shell string -- defense in
+    depth on top of `checker.py`'s existing tag-format validation.
+    `ragpilot update install` replaces Phase 3's "not implemented yet"
+    stub; `ragpilot upgrade` (schema migrations) is unchanged.
+  - The whole sequence is built around an injectable command-runner seam
+    (`tests/unit/test_update_installer.py`), so its tests never spawn a
+    real `curl`/`pip`/`pipx`/`powershell` process; manually confirmed
+    against this real sandbox's own editable dev install that
+    `detect_install_method` correctly reports `"editable"`.

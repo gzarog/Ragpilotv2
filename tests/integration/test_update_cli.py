@@ -1,9 +1,11 @@
 """``ragpilot update [check|status|install]`` -- real Typer CLI dispatch,
-with ``checker.fetch_latest_release`` (the one real network call) mocked
-out. Proves the CLI wiring, cache read/write-through, JSON output, and
-the "not implemented yet" install stub's exit code -- not the checker's
-own HTTP handling, which ``tests/unit/test_update_checker.py`` covers
-directly.
+with the one real network call (``checker.fetch_latest_release``, for
+``check``/``status``) or the whole upgrade orchestration
+(``installer.install_latest``, for ``install``) mocked out. Proves the
+CLI wiring, cache read/write-through, JSON output, and exit codes -- not
+the checker's own HTTP handling (``tests/unit/test_update_checker.py``)
+or the installer's own orchestration
+(``tests/unit/test_update_installer.py``), which cover those directly.
 """
 
 from __future__ import annotations
@@ -16,8 +18,9 @@ from typer.testing import CliRunner
 
 from ragpilot import __version__
 from ragpilot.cli.main import app
-from ragpilot.core.errors import EXIT_GENERIC_FAILURE
-from ragpilot.update import checker
+from ragpilot.core.errors import EXIT_GENERIC_FAILURE, EXIT_HEALTH_CHECK_FAILURE
+from ragpilot.update import checker, installer
+from ragpilot.update.installer import InstallOutcome, UpdateInstallError
 from ragpilot.update.models import ReleaseInfo
 
 
@@ -121,9 +124,92 @@ def test_status_json_with_no_prior_check(ragpilot_home: Path, runner: CliRunner)
     assert payload["status"] == "unknown"
 
 
-def test_install_reports_not_implemented_yet(ragpilot_home: Path, runner: CliRunner) -> None:
+def test_install_already_up_to_date(
+    ragpilot_home: Path, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        installer,
+        "install_latest",
+        lambda home, **_: InstallOutcome(
+            installed_version=__version__, upgraded=False, migrations_applied=False, healthy=True
+        ),
+    )
+
+    result = runner.invoke(app, ["update", "install"])
+
+    assert result.exit_code == 0, result.output
+    assert "already up to date" in result.output
+
+
+def test_install_success_reports_each_step(
+    ragpilot_home: Path, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        installer,
+        "install_latest",
+        lambda home, **_: InstallOutcome(
+            installed_version="999.0.0", upgraded=True, migrations_applied=True, healthy=True
+        ),
+    )
+
+    result = runner.invoke(app, ["update", "install"])
+
+    assert result.exit_code == 0, result.output
+    assert "Installed RAGpilot 999.0.0" in result.output
+    assert "Database migrations complete" in result.output
+    assert "Health check passed" in result.output
+    assert "RAGpilot 999.0.0 is ready." in result.output
+
+
+def test_install_json_output(
+    ragpilot_home: Path, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        installer,
+        "install_latest",
+        lambda home, **_: InstallOutcome(
+            installed_version="999.0.0", upgraded=True, migrations_applied=True, healthy=True
+        ),
+    )
+
+    result = runner.invoke(app, ["update", "install", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)["data"]
+    assert payload == {
+        "installed_version": "999.0.0",
+        "upgraded": True,
+        "migrations_applied": True,
+        "healthy": True,
+    }
+
+
+def test_install_unhealthy_after_upgrade_exits_with_health_check_failure(
+    ragpilot_home: Path, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        installer,
+        "install_latest",
+        lambda home, **_: InstallOutcome(
+            installed_version="999.0.0", upgraded=True, migrations_applied=True, healthy=False
+        ),
+    )
+
+    result = runner.invoke(app, ["update", "install"])
+
+    assert result.exit_code == EXIT_HEALTH_CHECK_FAILURE
+    assert "Health check reported issues" in result.output
+
+
+def test_install_surfaces_a_clear_error_for_an_unsupported_install_method(
+    ragpilot_home: Path, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _raise(home: Path, **_: object) -> None:
+        raise UpdateInstallError("this is an editable/dev RAGpilot install; use `git pull`")
+
+    monkeypatch.setattr(installer, "install_latest", _raise)
+
     result = runner.invoke(app, ["update", "install"])
 
     assert result.exit_code == EXIT_GENERIC_FAILURE
-    assert "not implemented yet" in result.output
-    assert "install.sh" in result.output
+    assert "git pull" in result.output

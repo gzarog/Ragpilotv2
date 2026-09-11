@@ -225,11 +225,18 @@ jobs:
           RAGPILOT_REF: ${{ github.head_ref || github.ref_name }}
           RAGPILOT_INSTALL_DIR: ${{ runner.temp }}/ragpilot-install
           RAGPILOT_BIN_DIR: ${{ runner.temp }}/ragpilot-bin
+          RAGPILOT_HOME: ${{ runner.temp }}/ragpilot-home
         run: sh ./install.sh
       - name: Verify the installed CLI works
+        env:
+          RAGPILOT_HOME: ${{ runner.temp }}/ragpilot-home
         run: |
           "${{ runner.temp }}/ragpilot-bin/ragpilot" version
           "${{ runner.temp }}/ragpilot-bin/ragpilot" doctor
+      - name: Verify install-script metadata was written (update/installer.py detection)
+        run: |
+          test -f "${{ runner.temp }}/ragpilot-home/install_info.json"
+          grep -q '"install_method": "install-script"' "${{ runner.temp }}/ragpilot-home/install_info.json"
 
   install-script-tests-windows:
     name: Install script (windows-latest)
@@ -245,8 +252,17 @@ jobs:
           RAGPILOT_REF: ${{ github.head_ref || github.ref_name }}
           RAGPILOT_INSTALL_DIR: ${{ runner.temp }}\ragpilot-install
           RAGPILOT_BIN_DIR: ${{ runner.temp }}\ragpilot-bin
+          RAGPILOT_HOME: ${{ runner.temp }}\ragpilot-home
         run: ./install.ps1
       - name: Verify the installed CLI works
+        env:
+          RAGPILOT_HOME: ${{ runner.temp }}\ragpilot-home
         run: |
           & "${{ runner.temp }}\ragpilot-bin\ragpilot.cmd" version
           & "${{ runner.temp }}\ragpilot-bin\ragpilot.cmd" doctor
+      - name: Verify install-script metadata was written (update/installer.py detection)
+        run: |
+          $infoPath = "${{ runner.temp }}\ragpilot-home\install_info.json"
+          if (-not (Test-Path $infoPath)) { throw "missing $infoPath" }
+          $info = Get-Content $infoPath -Raw | ConvertFrom-Json
+          if ($info.install_method -ne "install-script") { throw "unexpected install_method: $($info.install_method)" }
