@@ -1017,3 +1017,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     commas, which broke on `--help`'s own usage text (real commas in
     argument descriptions); now reads a single marker-prefixed line
     instead.
+
+- CLI performance improvement plan, Phase 3: manual update discovery --
+  `ragpilot update`/`update check`/`update status`/`update install`.
+  - New top-level `update/` package: `versioning.py` (installed version +
+    minimal MAJOR.MINOR.PATCH parsing/comparison -- full SemVer 2.0
+    pre-release/build-metadata precedence is out of scope, since this
+    plan's own release process (Phase 6) only ever produces plain
+    `MAJOR.MINOR.PATCH` tags), `checker.py` (queries GitHub's releases API
+    for `gzarog/Ragpilotv2` -- hardcoded, not configurable, and HTTPS
+    only -- and rejects any release whose tag is not a valid semantic
+    version), `cache.py` (`<RAGPILOT_HOME>/update.json` read/write, same
+    write-then-rename durability pattern as `service/health.py`'s daemon
+    health snapshot), `models.py`, and `installer.py` (currently a stub:
+    installation-method detection and the real upgrade path are a later
+    phase -- see below).
+  - New `cli/update.py`: `ragpilot update check` queries GitHub and
+    prints/writes the result (`Installed: X` / `Latest: Y` / "Update
+    available. Run: ragpilot update install" or "RAGpilot X is up to
+    date."); `ragpilot update status` reads the cache only and never
+    talks to GitHub; bare `ragpilot update` behaves like `update check`.
+    `ragpilot update install` exists but clearly reports it isn't
+    implemented yet, with the manual `curl | sh` / `irm | iex` / `pip
+    install` upgrade commands as a stand-in -- a later phase replaces
+    this stub with the real installation-method-aware upgrade path
+    (Definition of Done's "provides or performs the correct upgrade
+    path" isn't met yet by design). Distinct from the pre-existing
+    `ragpilot upgrade` (database schema migrations), which is unchanged.
+  - No command performs a synchronous GitHub request except the explicit
+    `ragpilot update check` (and, transitively, bare `ragpilot update`);
+    `update status` and every other command only ever read the local
+    cache. Automatic/background checking, and the startup notification
+    that reads this same cache, are a later phase.
+  - Validated against the real repository during development:
+    `ragpilot update check` successfully reached GitHub through this
+    environment's proxy and correctly *rejected* `gzarog/Ragpilotv2`'s
+    current release (tagged `ragpilot_0_1_0`, not `v*.*.*`) as an invalid
+    version rather than crashing or misreporting it -- exactly the
+    Security Requirements' "accept valid semantic versions only"
+    behavior. That tag predates this plan's tagging convention and is
+    expected to be superseded once Phase 6 lands.

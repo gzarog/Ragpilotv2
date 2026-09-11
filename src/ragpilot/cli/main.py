@@ -27,6 +27,7 @@ from ragpilot.cli import (
     source,
     status,
     symbol,
+    update,
     upgrade,
     vectors,
     version_cmd,
@@ -45,6 +46,7 @@ app.add_typer(config_cmd.app, name="config")
 app.add_typer(link.app, name="link")
 app.add_typer(daemon.app, name="daemon")
 app.add_typer(vectors.app, name="vectors")
+app.add_typer(update.app, name="update")
 
 app.command("init", help="Bootstrap the RAGpilot runtime directory.")(init.init)
 app.command("index", help="Scan sources and process pending files.")(index.index)
