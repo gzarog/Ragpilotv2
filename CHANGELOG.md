@@ -1382,3 +1382,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   disables the coordinator's own scanner-level protection and confirms
   the exact reported `IntegrityError` without the coordinator fix, and
   a clean, correctly-deduplicated run with it.
+
+- Fixed `ragpilot daemon start` popping open a second, visible console
+  window on Windows instead of returning silently to the caller's own
+  terminal -- reported live. `cli/daemon.py`'s `_spawn` used
+  `CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS` for the detached
+  background process; `DETACHED_PROCESS` alone doesn't reliably suppress
+  a console window for a console-subsystem child (`python.exe` is one)
+  in practice, despite Microsoft's docs describing it as "no console
+  handle set". Added `CREATE_NO_WINDOW`, the flag whose specific job is
+  suppressing window creation for a console-subsystem process. Covered
+  by a new Windows-only regression test that starts the daemon for real
+  and checks the Win32 window list directly (`EnumWindows` via
+  `ctypes`, the same direct-WinAPI-access pattern as `service/pid.py`)
+  for any visible window owned by the spawned PID, rather than trusting
+  the spawn flags alone -- there is no other way to catch this class of
+  bug in CI, since a headless test run has no other visible trace of a
+  window actually appearing.
