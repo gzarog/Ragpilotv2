@@ -11,6 +11,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history/tags, not the default shallow clone -- this
+          # project's version is now git-tag-derived (hatch-vcs; see
+          # pyproject.toml's [tool.hatch.version]), and a shallow clone
+          # can't compute a meaningful "N commits since the last tag"
+          # dev version. Not required for correctness here (nothing in
+          # this job depends on the exact version string), but keeps
+          # what `pip install -e ".[dev]"` reports consistent with a
+          # real local checkout.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -46,6 +56,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # see lint-and-typecheck's own checkout step for why
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

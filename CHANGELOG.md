@@ -1134,3 +1134,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     real `curl`/`pip`/`pipx`/`powershell` process; manually confirmed
     against this real sandbox's own editable dev install that
     `detect_install_method` correctly reports `"editable"`.
+
+- CLI performance improvement plan, Phase 6: one source of truth for the
+  version, and an automatic patch release on every successful merge to
+  `main`.
+  - **Tag-derived versioning**: `pyproject.toml` now declares
+    `dynamic = ["version"]` with `[tool.hatch.version] source = "vcs"`
+    (via the `hatch-vcs` build backend) instead of a version duplicated
+    by hand in both `pyproject.toml` and `src/ragpilot/__init__.py`. An
+    immutable git tag (`v0.1.8`, ...) is now the only source of truth;
+    `[tool.hatch.build.hooks.vcs]` writes the resolved version to the
+    gitignored `src/ragpilot/_version.py` at build/install time, and
+    `__init__.py` imports `__version__` from it (falling back to
+    `"0+unknown"` for a raw, never-installed source checkout). An
+    editable/unreleased build gets a PEP 440 dev version instead (e.g.
+    `"0.1.dev39+gd6cd42e.d20260911"`) -- `update/versioning.py`'s
+    `is_newer` now parses the installed side with `packaging.version`
+    (already a transitive dependency of the packaging toolchain itself;
+    now declared explicitly) so comparing against a dev build never
+    mistakes "no tag yet" for "no update available"; the untrusted,
+    externally-sourced side (a GitHub release tag) stays held to the
+    existing strict `MAJOR.MINOR.PATCH`-only validation.
+  - **`.github/workflows/main-release.yml`** (new): triggered by
+    `workflow_run` on `ci.yml`'s "CI" workflow completing, filtered to a
+    run whose head branch is `main` (never a pull request's own CI run)
+    and whose conclusion is `success` (so a failing required check on
+    `main` blocks the release exactly like it should) -- reads the
+    latest `v*.*.*` tag, bumps its patch component (defaulting to
+    `v0.1.0` when no tag exists yet, as is currently the case for this
+    repository), and pushes the new tag. `concurrency: group:
+    main-release` serializes back-to-back merges so two close-together
+    releases can't both compute the same next version from a stale read.
+    No commit is ever pushed back to `main` to record the new version --
+    the tag itself *is* the record (this plan's own stated reason to
+    prefer tag-derived versions: it can't recursively re-trigger this
+    same workflow the way editing `pyproject.toml`/`__init__.py` back
+    into `main` could).
+  - **`.github/workflows/release.yml`** now also accepts `workflow_call`
+    (alongside its existing `on: push: tags: "v*.*.*"`, unchanged for a
+    human/automation with real push access pushing a tag directly) --
+    `main-release.yml` calls it explicitly right after pushing the new
+    tag, rather than depending on that push to trigger it the normal way:
+    a push authenticated with the default `GITHUB_TOKEN` deliberately
+    never triggers another workflow's own `on: push` (GitHub's built-in
+    anti-recursion rule), so relying on that would have silently built
+    nothing. `tag_name`/the checkout `ref` are now `inputs.tag ||
+    github.ref_name` throughout, since `GITHUB_REF` for the
+    `workflow_call` path is `main`'s branch ref, not the tag.
+  - `ci.yml`'s required `lint-and-typecheck`/`test` jobs and
+    `release.yml`'s build job now check out full history (`fetch-depth:
+    0`) instead of the default shallow clone -- hatch-vcs needs every
+    tag reachable to compute a meaningful version, which a depth-1 clone
+    can't provide.
+  - **Validated locally, end to end**: built a real sdist/wheel via
+    `python -m build` against this branch's actual (dirty, no-tag)
+    working tree -- succeeded, producing a PEP 440 dev version. Then,
+    with a clean working tree and a local `v0.1.0` tag at HEAD, rebuilt
+    and got exactly `ragpilot-0.1.0` (no dev suffix) -- confirming the
+    exact scenario `release.yml`'s build job will see for a real tagged
+    release. The tag-bump shell logic in `main-release.yml` was verified
+    against several tag sets (none, sequential, double-digit components
+    like `v0.1.9`→`v0.1.10`, mixed major versions) via `sort -V`, which
+    orders them numerically rather than lexicographically.
+  - **Two real bugs this surfaced in CI, both in the hatch-vcs config,
+    fixed in this same change**: (1) `pip install`-ing from a plain
+    source tarball/zipball (exactly what `install.sh`/`install.ps1`
+    download) has no `.git` directory at all, and setuptools-scm (which
+    hatch-vcs wraps) hard-failed the entire install rather than falling
+    back -- fixed with `fallback-version = "0.0.0"`. (2) this
+    repository's actual first release predates this plan's tagging
+    convention (tagged `ragpilot_0_1_0`, not `v0.1.0`) and, once
+    `fetch-depth: 0` made every tag reachable, setuptools-scm's tag
+    selection (`git describe`, unconditional nearest-tag, parsed only
+    *after* selection) picked that one and hard-failed trying to parse
+    it as a version -- `tag-pattern`/`tag_regex` only affects parsing
+    *after* selection, so it can't prevent this; fixed with a
+    `[tool.hatch.version.raw-options]` `git_describe_command` override
+    adding `--match 'v*.*.*'`, which excludes it from ever being
+    selected as a candidate in the first place. Both reproduced and
+    fixed locally against this repository's actual tag before pushing:
+    a real archive with no `.git` now builds `ragpilot-0.0.0`; a `.git`
+    checkout with only the `ragpilot_0_1_0` tag reachable now builds a
+    `0.0.1.dev<N>+g<sha>` dev version instead of failing outright; a
+    clean `v0.1.0` tag at HEAD still builds exactly `ragpilot-0.1.0`.
