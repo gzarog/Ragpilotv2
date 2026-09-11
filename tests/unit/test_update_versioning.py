@@ -68,3 +68,16 @@ def test_is_newer_never_trusts_an_invalid_candidate() -> None:
 
 def test_is_newer_never_trusts_an_invalid_baseline() -> None:
     assert versioning.is_newer("0.1.8", "not-a-version") is False
+
+
+def test_is_newer_handles_a_pep440_dev_baseline() -> None:
+    # An editable/unreleased build's version (this project's own
+    # pyproject.toml derives it from git tags via hatch-vcs) is a PEP 440
+    # dev version, not a plain release. PEP 440 sorts a dev release
+    # *before* its own base version ("0.1.dev39" < "0.1.0"), so a release
+    # sharing that base -- let alone a later one -- must compare as
+    # newer than the dev build, and an earlier release must not.
+    dev_baseline = "0.1.dev39+gd6cd42eaa.d20260911"
+    assert versioning.is_newer("0.1.0", dev_baseline) is True
+    assert versioning.is_newer("999.0.0", dev_baseline) is True
+    assert versioning.is_newer("0.0.9", dev_baseline) is False

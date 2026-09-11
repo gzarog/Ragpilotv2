@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "ragpilot"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Local-first knowledge compiler and retrieval engine CLI"
 readme = "README.md"
 license = "MIT"
@@ -60,6 +60,15 @@ dependencies = [
     # dependency (via `mcp`); declared explicitly since first-party code
     # now imports it directly.
     "httpx>=0.27",
+    # CLI performance improvement plan, Phase 6: update/versioning.py's
+    # PEP 440 comparison between an untrusted release tag and the
+    # installed version -- which, for an editable/unreleased build (this
+    # project's own pyproject.toml now derives __version__ from git tags
+    # via hatch-vcs), is itself a PEP 440 dev version rather than a plain
+    # MAJOR.MINOR.PATCH string. Already a transitive dependency (via
+    # hatchling/pip themselves); declared explicitly since first-party
+    # code now imports it directly.
+    "packaging>=24",
     # Search performance redesign: retrieval/ann.py's production ANN
     # backend (HNSW), replacing brute-force cosine similarity over every
     # current-model embedding as the default semantic-search path. Pure
@@ -95,6 +104,19 @@ ragpilot = "ragpilot.cli.main:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ragpilot"]
+
+# CLI performance improvement plan, Phase 6: one source of truth for the
+# version -- an immutable git tag (v0.1.8, ...) -- instead of a value
+# duplicated by hand across this file and src/ragpilot/__init__.py. This
+# writes src/ragpilot/_version.py (gitignored, generated) at build/install
+# time; __init__.py imports __version__ from it. No tag yet (or an
+# editable install with no tags reachable) falls back to a
+# "0.1.dev<N>+g<sha>"-shaped dev version -- never a hard failure.
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/ragpilot/_version.py"
 
 [tool.ruff]
 target-version = "py312"
