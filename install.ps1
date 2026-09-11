@@ -90,6 +90,11 @@ if (Test-Path $VenvDir) { Remove-Item -Recurse -Force $VenvDir }
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 Write-Host "Installing RAGpilot (this downloads its dependencies, including torch -- may take a few minutes)..."
 & $VenvPython -m pip install --quiet --upgrade pip
+# "WARNING: Cache entry deserialization failed, entry ignored" lines below
+# are expected right after the pip upgrade above (an older cache entry in a
+# format the new pip can't read) -- harmless, pip just re-downloads that
+# entry instead of using a stale cache.
+Write-Host "(you may see `"Cache entry deserialization failed`" warnings below -- harmless, pip just re-downloads that entry)"
 # Deliberately not --quiet here: pip's normal download/build progress output
 # is the only feedback during a multi-minute, multi-hundred-MB install (torch
 # chief among the dependencies) -- silencing it makes a slow-but-working
