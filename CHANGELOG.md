@@ -1251,3 +1251,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     install; a real running daemon is stopped (confirmed via `ps`) before
     its data directory is deleted; `--keep-data` leaves `RAGPILOT_HOME`
     in place.
+
+- Fixed a real-world Windows bug in `ragpilot update install`'s
+  install-script path: it re-runs `install.ps1` from inside the
+  currently-running `venv\Scripts\ragpilot.exe`, which rebuilt that same
+  venv in place -- deleting or overwriting its own running exe file, which
+  Windows refuses (a sharing violation pip surfaced as `ERROR: Could not
+  install packages due to an OSError: [WinError 32] ... being used by
+  another process`). `install.ps1` now renames the existing venv out of
+  the way first (a directory rename succeeds even with an open file
+  inside it, unlike deleting/overwriting that file directly) and builds
+  the new one fresh, directly at the real venv path -- not at a temporary
+  path swapped in afterward, since pip's own generated console-script
+  launchers (`ragpilot.exe` included) embed the venv's exact interpreter
+  path at install time and break if the venv is relocated post-install
+  (this was tried first and caught by the new regression test below,
+  which is exactly what it's for). A rename-away left half-done because
+  the old venv is still in use is cleaned up automatically at the start of
+  the next install/upgrade run, once it's no longer locked. install.sh
+  (POSIX) is unaffected -- replacing an open file works there already.
+  Covered by a new Windows CI regression test that holds an exclusive
+  read lock on the installed `ragpilot.exe` (simulating a running process)
+  across a second `install.ps1` run and confirms both that run and the
+  resulting CLI still work.
+
+- Fixed `ragpilot version`/`__version__` always reporting `0.0.0` for
+  every install-script install: `install.sh`/`install.ps1` download a
+  branch or tag *archive* (zip/tarball) from GitHub, which never includes
+  a `.git` directory, so hatch-vcs can never derive a real version from
+  it and always falls back to the hardcoded `0.0.0` placeholder (see the
+  entry above this one). Both scripts now set
+  `SETUPTOOLS_SCM_PRETEND_VERSION` before the real `pip install`, resolved
+  from `$Ref`/`$REF`: an explicit release tag (the shape
+  `update/installer.py`'s upgrade path always passes) is used directly;
+  the default `main` instead queries GitHub for the latest actual
+  release, since `main` itself isn't a version; any other custom/branch
+  ref is left unresolved, reporting the honest `0.0.0` rather than an
+  unrelated release's version. Verified end to end against a real
+  `.git`-less copy of this repository: unset, the build is `ragpilot-0.0.0`
+  (confirming the bug); with the env var set, both the built wheel's
+  version metadata and the installed `ragpilot.__version__` reflect it
+  exactly.
+
+- Fixed a second real-world Windows bug in `ragpilot uninstall`,
+  reported against a live install: it purged `RAGPILOT_HOME` *before*
+  removing the application, but install.sh/install.ps1's default layout
+  nests the venv *inside* `RAGPILOT_HOME` (they share the same default
+  root) -- purging data first could delete the very interpreter the
+  `pip uninstall`/`pipx uninstall` step (run via `sys.executable`) then
+  needed, breaking it outright (`failed to locate pyvenv.cfg: The system
+  cannot find the file specified`, followed by a broken `rich` import).
+  `cli/uninstall.py` now removes the application first and purges data
+  second -- application removal never touches `RAGPILOT_HOME`, so the
+  reverse order has no equivalent risk. Covered by a new test asserting
+  the call order directly.
