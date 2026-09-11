@@ -66,9 +66,16 @@ rm -rf "$VENV_DIR"
 
 echo "Installing RAGpilot (this downloads its dependencies, including torch -- may take a few minutes)..."
 "$VENV_DIR/bin/pip" install --quiet --upgrade pip
-# "WARNING: Cache entry deserialization failed, entry ignored" lines below
-# are expected right after the pip upgrade above (an older cache entry in a
-# format the new pip can't read) -- harmless, pip just re-downloads that
+# Purge pip's cache before the real install: an entry written by whatever
+# pip version was previously on this machine can fail to deserialize under
+# the version just upgraded to above ("WARNING: Cache entry deserialization
+# failed, entry ignored") -- pip already degrades safely from that (just
+# re-downloads), but starting from a clean cache means it shouldn't happen
+# at all. `|| true`: a cache that doesn't exist yet, or isn't writable, is
+# not a reason to abort the install.
+"$VENV_DIR/bin/pip" cache purge >/dev/null 2>&1 || true
+# Still explained below in case some other/newer cache mismatch shows up
+# despite the purge above: harmless either way, pip just re-downloads that
 # entry instead of using a stale cache.
 echo "(you may see \"Cache entry deserialization failed\" warnings below -- harmless, pip just re-downloads that entry)"
 # Deliberately not --quiet here: pip's normal download/build progress output

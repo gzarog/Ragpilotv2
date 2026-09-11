@@ -90,9 +90,16 @@ if (Test-Path $VenvDir) { Remove-Item -Recurse -Force $VenvDir }
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 Write-Host "Installing RAGpilot (this downloads its dependencies, including torch -- may take a few minutes)..."
 & $VenvPython -m pip install --quiet --upgrade pip
-# "WARNING: Cache entry deserialization failed, entry ignored" lines below
-# are expected right after the pip upgrade above (an older cache entry in a
-# format the new pip can't read) -- harmless, pip just re-downloads that
+# Purge pip's cache before the real install: an entry written by whatever
+# pip version was previously on this machine can fail to deserialize under
+# the version just upgraded to above ("WARNING: Cache entry deserialization
+# failed, entry ignored") -- pip already degrades safely from that (just
+# re-downloads), but starting from a clean cache means it shouldn't happen
+# at all. A cache that doesn't exist yet, or isn't writable, is not a
+# reason to abort the install.
+try { & $VenvPython -m pip cache purge *> $null } catch {}
+# Still explained below in case some other/newer cache mismatch shows up
+# despite the purge above: harmless either way, pip just re-downloads that
 # entry instead of using a stale cache.
 Write-Host "(you may see `"Cache entry deserialization failed`" warnings below -- harmless, pip just re-downloads that entry)"
 # Deliberately not --quiet here: pip's normal download/build progress output
