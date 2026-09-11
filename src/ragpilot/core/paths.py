@@ -69,6 +69,17 @@ def daemon_health_path(home: Path | None = None) -> Path:
     return (home or runtime_dir()) / "daemon_health.json"
 
 
+def update_cache_path(home: Path | None = None) -> Path:
+    """CLI performance improvement plan, Phase 3: the small local cache
+    ``ragpilot update check`` writes and ``ragpilot update status`` reads
+    -- one per ``RAGPILOT_HOME``, mirroring ``daemon_health_path`` above.
+    A later phase's startup notification reads this too, which is the
+    whole point of it existing: never a synchronous GitHub call on every
+    invocation. See ``update/cache.py``.
+    """
+    return (home or runtime_dir()) / "update.json"
+
+
 def projects_dir(home: Path | None = None) -> Path:
     return (home or runtime_dir()) / "projects"
 
