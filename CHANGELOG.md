@@ -973,3 +973,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     every CLI submodule eagerly, which transitively loads the full heavy
     stack regardless of command; a follow-up phase removes those eager
     imports and flips this to a plain (passing) assertion.
+
+- CLI performance improvement plan, Phase 2: lazy imports for the three
+  chains eagerly reachable from `ragpilot.cli.main` (which imports every
+  CLI submodule up front, regardless of which command was invoked) into
+  Docling, the `mcp` SDK, and the `openai`/`anthropic` SDKs.
+  - `indexing/runner.py`'s `build_processor_registry` now imports
+    `documents.pipeline.document_processor` inside the function (still
+    gated behind `config.documents.enabled`) instead of at module level --
+    severs the one path (`cli/index.py`, `cli/rebuild.py` via
+    `ops/rebuild.py`, `cli/watch.py`/`cli/daemon.py` via
+    `service/daemon.py`) that pulled Docling (and, through it, torch) into
+    every one of those commands' imports.
+  - `documents/docling_adapter.py` no longer imports Docling/docling_core
+    at module level at all: `InputFormat`/`ConversionStatus`/
+    `PdfPipelineOptions`/`DocumentConverter`/`PdfFormatOption`/
+    `DocumentStream` are now imported inside the functions that actually
+    construct or use them (`_get_converter`, `_get_md_converter`,
+    `_run_conversion`, `_reparse_markdown`); `DoclingDocument` is
+    `TYPE_CHECKING`-only (safe under this module's existing
+    `from __future__ import annotations`). The `InputFormat`-keyed format
+    map is now built lazily and cached (`_format_to_input_format`) rather
+    than at import time.
+  - `cli/serve.py` now imports `mcp.server.run_stdio` inside `serve()`,
+    right before calling it, instead of at module level -- the `mcp` SDK
+    now only loads for `ragpilot serve --mcp`.
+  - `ai/factory.py`'s `create_provider` now imports each provider module
+    (`ai/openai.py`, `ai/anthropic.py`, `ai/openai_compatible.py`,
+    `ai/ollama.py`) inside its own branch instead of importing all four at
+    module level -- `ragpilot ask` now loads only the SDK for whichever
+    `ai.provider` is actually configured, not every provider's SDK.
+  - Net effect, measured with `python -m benchmarks.cli_startup` (Phase
+    1's benchmark): `version`/`--help`/`config --help`/`status`/
+    `search --help` each dropped from ~9s to roughly 500-600ms subprocess
+    wall-clock on shared/virtualized hardware -- still short of the
+    aggressive targets in `benchmarks/cli_startup/targets.py` (which
+    assume real, unshared developer hardware, per that module's own
+    docstring) but a ~15-18x improvement. `tests/unit/test_cli_startup_imports.py`
+    (Phase 1's `xfail(strict=True)` regression test) is now a plain,
+    passing assertion -- the fix that test was written against. Also
+    fixes a latent bug in that test's own subprocess-output parsing (masked
+    by `xfail` until now): it naively split the entire captured stdout on
+    commas, which broke on `--help`'s own usage text (real commas in
+    argument descriptions); now reads a single marker-prefixed line
+    instead.

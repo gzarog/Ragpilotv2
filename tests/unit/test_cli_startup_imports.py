@@ -12,14 +12,15 @@ Runs each command in a fresh subprocess -- inspecting the current
 process's ``sys.modules`` would be polluted by whatever the rest of the
 test suite already imported.
 
-Marked ``xfail(strict=True)``: ``ragpilot.cli.main`` currently imports
+Was ``xfail(strict=True)`` while ``ragpilot.cli.main``'s eager imports of
 every CLI submodule (``ask``, ``index``, ``serve``, ``watch``, ``vectors``,
-...) eagerly at module load time, which transitively loads the full heavy
-stack regardless of which command is invoked. Flip to a plain assertion
-once the lazy-import/minimal-bootstrap work (Phase 2) removes those eager
-imports -- an unexpected pass here would mean the regression was fixed
-without anyone noticing, which ``strict=True`` turns into a failure
-instead of a silently-stale xfail.
+...) transitively loaded the full heavy stack regardless of which command
+was invoked. Fixed (Phase 2) by moving each heavy import to the function
+that actually needs it: ``indexing/runner.py``'s ``build_processor_registry``
+(Docling, via ``documents/pipeline.py``), ``cli/serve.py``'s ``serve()``
+(the ``mcp`` SDK), and ``ai/factory.py``'s ``create_provider()`` (the
+``openai``/``anthropic`` SDKs, one per configured provider) -- now a plain,
+passing assertion.
 """
 
 from __future__ import annotations
@@ -47,7 +48,14 @@ LIGHTWEIGHT_INVOCATIONS = (
 )
 
 
+_MARKER = "HEAVY_MODULES:"
+
+
 def _loaded_heavy_modules(cli_args: list[str]) -> list[str]:
+    # `--help`/usage output (real commas included, e.g. in argument help
+    # text) also lands on stdout, so the heavy-modules line is prefixed
+    # with a marker and picked out by exact line match rather than naively
+    # parsed out of the whole captured stdout.
     script = (
         "import sys\n"
         "from ragpilot.cli.main import app\n"
@@ -56,7 +64,7 @@ def _loaded_heavy_modules(cli_args: list[str]) -> list[str]:
         "except SystemExit:\n"
         "    pass\n"
         f"heavy = {list(HEAVY_MODULES)!r}\n"
-        "print(','.join(sorted(m for m in heavy if m in sys.modules)))\n"
+        f"print({_MARKER!r} + ','.join(sorted(m for m in heavy if m in sys.modules)))\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", script],
@@ -64,19 +72,16 @@ def _loaded_heavy_modules(cli_args: list[str]) -> list[str]:
         text=True,
         timeout=60,
     )
-    loaded = result.stdout.strip()
-    return loaded.split(",") if loaded else []
+    for line in result.stdout.splitlines():
+        if line.startswith(_MARKER):
+            loaded = line[len(_MARKER) :]
+            return loaded.split(",") if loaded else []
+    raise AssertionError(
+        f"{cli_args}: subprocess produced no {_MARKER!r} marker line "
+        f"(rc={result.returncode}); stderr:\n{result.stderr}"
+    )
 
 
-@pytest.mark.xfail(
-    reason=(
-        "ragpilot.cli.main currently imports every CLI submodule eagerly, "
-        "which transitively loads Docling/torch/transformers/mcp/openai/"
-        "anthropic/usearch regardless of the command invoked; fixed by the "
-        "lazy-import/minimal-bootstrap work (Phase 2)."
-    ),
-    strict=True,
-)
 @pytest.mark.parametrize("cli_args", LIGHTWEIGHT_INVOCATIONS, ids=lambda a: " ".join(a))
 def test_lightweight_command_does_not_load_heavy_dependencies(cli_args: list[str]) -> None:
     loaded = _loaded_heavy_modules(cli_args)
