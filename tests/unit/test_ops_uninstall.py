@@ -144,7 +144,17 @@ class TestRemoveApplication:
 
         assert uninstall_ops.remove_application(plan, runner=runner) is False
 
-    def test_install_script_removes_exact_paths_only(self, tmp_path: Path) -> None:
+    def test_install_script_removes_exact_paths_only(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Forces the direct, synchronous (POSIX) removal path regardless
+        # of the OS actually running this test: the Windows path defers
+        # deletion to a detached, delayed process (see
+        # test_windows_spawns_a_detached_delayed_delete below), which
+        # this test isn't set up to wait for -- what's under test here is
+        # *which* paths get removed, not *how*.
+        monkeypatch.setattr(uninstall_ops.sys, "platform", "linux")
+
         venv_dir = tmp_path / "install" / "venv"
         app_dir = tmp_path / "install" / "app"
         bin_dir = tmp_path / "bin"
@@ -171,6 +181,37 @@ class TestRemoveApplication:
         assert not launcher.exists()
         assert other_file.is_file()  # sibling file in the shared bin dir survives
         assert other_file.read_text() == "keep me"
+
+    def test_windows_spawns_a_detached_delayed_delete(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(uninstall_ops.sys, "platform", "win32")
+        calls: list[tuple[list[str], dict[str, object]]] = []
+        monkeypatch.setattr(
+            uninstall_ops.subprocess,
+            "Popen",
+            lambda cmd, **kw: calls.append((cmd, kw)),
+        )
+
+        venv_dir = tmp_path / "install" / "venv"
+        app_dir = tmp_path / "install" / "app"
+        launcher = tmp_path / "bin" / "ragpilot.cmd"
+        plan = uninstall_ops.UninstallPlan(
+            method=InstallMethod.INSTALL_SCRIPT,
+            can_auto_remove_app=True,
+            app_paths=[venv_dir, app_dir, launcher],
+        )
+
+        result = uninstall_ops.remove_application(plan)
+
+        assert result is True
+        assert len(calls) == 1
+        cmd, kwargs = calls[0]
+        script = cmd[-1]
+        assert str(venv_dir) in script
+        assert str(app_dir) in script
+        assert str(launcher) in script
+        assert "creationflags" in kwargs
 
 
 class TestPurgeHome:
