@@ -1258,13 +1258,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   venv in place -- deleting or overwriting its own running exe file, which
   Windows refuses (a sharing violation pip surfaced as `ERROR: Could not
   install packages due to an OSError: [WinError 32] ... being used by
-  another process`). `install.ps1` now builds the new venv side-by-side at
-  `venv.new` and swaps it into place with directory renames at the end
-  (renaming a directory succeeds even with an open file inside it, unlike
-  deleting/overwriting that file directly); a swap left half-done because
+  another process`). `install.ps1` now renames the existing venv out of
+  the way first (a directory rename succeeds even with an open file
+  inside it, unlike deleting/overwriting that file directly) and builds
+  the new one fresh, directly at the real venv path -- not at a temporary
+  path swapped in afterward, since pip's own generated console-script
+  launchers (`ragpilot.exe` included) embed the venv's exact interpreter
+  path at install time and break if the venv is relocated post-install
+  (this was tried first and caught by the new regression test below,
+  which is exactly what it's for). A rename-away left half-done because
   the old venv is still in use is cleaned up automatically at the start of
   the next install/upgrade run, once it's no longer locked. install.sh
   (POSIX) is unaffected -- replacing an open file works there already.
   Covered by a new Windows CI regression test that holds an exclusive
   read lock on the installed `ragpilot.exe` (simulating a running process)
-  across a second `install.ps1` run and confirms it still succeeds.
+  across a second `install.ps1` run and confirms both that run and the
+  resulting CLI still work.
