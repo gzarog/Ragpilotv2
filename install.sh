@@ -13,6 +13,11 @@ INSTALL_DIR="${RAGPILOT_INSTALL_DIR:-$HOME/.ragpilot}"
 APP_DIR="$INSTALL_DIR/app"
 VENV_DIR="$INSTALL_DIR/venv"
 BIN_DIR="${RAGPILOT_BIN_DIR:-$HOME/.local/bin}"
+# Same default as ragpilot's own core/paths.py::runtime_dir() on POSIX --
+# RAGPILOT_INSTALL_DIR/RAGPILOT_HOME happen to share a default today, but
+# are independent overrides, so this is computed the same way rather than
+# assumed equal to INSTALL_DIR above.
+RAGPILOT_HOME="${RAGPILOT_HOME:-$HOME/.ragpilot}"
 
 find_python() {
     for candidate in python3.13 python3.12 python3 python; do
@@ -87,6 +92,21 @@ echo "(you may see \"Cache entry deserialization failed\" warnings below -- harm
 mkdir -p "$BIN_DIR"
 ln -sf "$VENV_DIR/bin/ragpilot" "$BIN_DIR/ragpilot"
 echo "RAGpilot installed: $BIN_DIR/ragpilot"
+
+# Lets `ragpilot update install` (update/installer.py) detect that this is
+# an install-script install and where to re-run this same script, rather
+# than guessing from the running interpreter's own path -- see this
+# file's own record of itself as the one thing that can't guess itself.
+mkdir -p "$RAGPILOT_HOME"
+cat > "$RAGPILOT_HOME/install_info.json" <<EOF
+{
+  "install_method": "install-script",
+  "repository": "$REPO",
+  "install_dir": "$INSTALL_DIR",
+  "venv_dir": "$VENV_DIR",
+  "bin_dir": "$BIN_DIR"
+}
+EOF
 
 case ":$PATH:" in
     *":$BIN_DIR:"*) ;;

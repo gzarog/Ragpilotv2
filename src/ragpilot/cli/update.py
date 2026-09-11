@@ -6,8 +6,8 @@ single most useful thing to do with no arguments, mirroring tools like
 
 Distinct from ``ragpilot upgrade`` (``cli/upgrade.py``), which applies
 database *schema* migrations to the already-installed RAGpilot: these
-commands discover and (in a later phase) install a newer RAGpilot
-*release* itself. See ``update/__init__.py``'s module docstring.
+commands discover and install a newer RAGpilot *release* itself. See
+``update/__init__.py``'s module docstring.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from typing import Annotated
 import typer
 
 from ragpilot.core import paths
-from ragpilot.core.errors import RagpilotError
+from ragpilot.core.errors import EXIT_HEALTH_CHECK_FAILURE, RagpilotError
 from ragpilot.update import cache, checker, installer, versioning
 from ragpilot.update.models import UpdateCache
 
@@ -122,10 +122,42 @@ def status(json_output: Annotated[bool, typer.Option("--json")] = False) -> None
     console.print(f"Status:    {status_label}")
 
 
-@app.command("install", help="Install the latest release. Not implemented yet -- see below.")
+@app.command("install", help="Check for, and install, the latest release.")
 @cli_command
-def install() -> None:
+def install(json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
+    home = paths.ensure_runtime_layout()
     try:
-        installer.install_latest()
-    except installer.UpdateInstallNotImplementedError as exc:
+        outcome = installer.install_latest(home)
+    except installer.UpdateInstallError as exc:
         raise RagpilotError(str(exc)) from exc
+
+    if json_output:
+        print_json(
+            {
+                "installed_version": outcome.installed_version,
+                "upgraded": outcome.upgraded,
+                "migrations_applied": outcome.migrations_applied,
+                "healthy": outcome.healthy,
+            }
+        )
+    elif not outcome.upgraded:
+        console.print(f"RAGpilot {outcome.installed_version} is already up to date.")
+    else:
+        console.print(f"[green]✓[/green] Installed RAGpilot {outcome.installed_version}")
+        if outcome.migrations_applied:
+            console.print("[green]✓[/green] Database migrations complete")
+        else:
+            console.print(
+                "[yellow]![/yellow] Database migrations did not complete cleanly -- "
+                "run `ragpilot upgrade` to retry"
+            )
+        if outcome.healthy:
+            console.print("[green]✓[/green] Health check passed")
+        else:
+            console.print(
+                "[yellow]![/yellow] Health check reported issues -- see `ragpilot doctor`"
+            )
+        console.print(f"\nRAGpilot {outcome.installed_version} is ready.")
+
+    if outcome.upgraded and not (outcome.migrations_applied and outcome.healthy):
+        raise typer.Exit(code=EXIT_HEALTH_CHECK_FAILURE)
