@@ -70,7 +70,10 @@ class AppContext:
             level=config.runtime.log_level,
             console_format=log_console_format,
         )
-        sources_conn = connect(paths.sources_db_path(resolved_home))
+        sources_conn = connect(
+            paths.sources_db_path(resolved_home),
+            cache_size_mb=config.runtime.sqlite_cache_size_mb,
+        )
         apply_migrations(sources_conn, "sources")
         return cls(config=config, home=resolved_home, cwd=resolved_cwd, sources_conn=sources_conn)
 
@@ -78,7 +81,10 @@ class AppContext:
         conn = self._project_conns.get(project_id)
         if conn is None:
             paths.ensure_project_layout(project_id, self.home)
-            conn = connect(paths.project_db_path(project_id, self.home))
+            conn = connect(
+                paths.project_db_path(project_id, self.home),
+                cache_size_mb=self.config.runtime.sqlite_cache_size_mb,
+            )
             apply_migrations(conn, "knowledge")
             self._project_conns[project_id] = conn
         return conn
