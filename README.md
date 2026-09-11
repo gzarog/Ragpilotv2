@@ -126,6 +126,7 @@ After indexing, RAGpilot connects code entities to the documents that describe t
 - `ragpilot restore ARCHIVE` — verifies and integrity-checks a backup before atomically swapping it into place; a bad archive is refused before anything live is touched.
 - `ragpilot rebuild [--source ID]` — wipes and re-indexes a source from scratch, proving source files are the real truth.
 - `ragpilot upgrade` — applies pending schema migrations, backing up automatically first.
+- `ragpilot update [check|status|install]` — checks for a newer RAGpilot release (distinct from `upgrade`'s schema migrations). Bare `ragpilot update`/`update check` queries GitHub; `update status` reads the local cache only. Normal commands never make a synchronous GitHub request for this: a lightweight detached check runs at most once every `updates.check_interval_hours` (default 24), and the next invocation notifies you once, to stderr, if a newer version was found. Disable entirely with `ragpilot config set updates.enabled false` or `RAGPILOT_UPDATES__ENABLED=false`.
 
 ### Optional: semantic search & AI-assisted answers
 Everything above works fully offline with no LLM. Two opt-in extras layer on top:

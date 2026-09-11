@@ -1057,3 +1057,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     Security Requirements' "accept valid semantic versions only"
     behavior. That tag predates this plan's tagging convention and is
     expected to be superseded once Phase 6 lands.
+
+- CLI performance improvement plan, Phase 4: cached automatic update
+  notifications -- no command makes a synchronous GitHub request.
+  - New `updates:` config section (`enabled`, `check_interval_hours`,
+    `notify`, `channel` -- `RAGPILOT_UPDATES__*` env overrides). `channel`
+    is reserved for a future non-stable release channel; accepted and
+    stored, not yet acted on, since this repository only publishes one
+    channel today.
+  - `update/background.py`: `AppContext.bootstrap()` -- the one path
+    every "normal" command shares, and specifically *not* `version`/
+    `--help`/`config`/`update ...`, none of which call it -- now decides,
+    from the local cache's age (`updates.check_interval_hours`, default
+    24h), whether to spawn a fully detached `python -m
+    ragpilot.update.background <home>` process that makes the one real
+    GitHub request and writes the cache, then exits. The calling command
+    never waits on it; a failed spawn (no fork permission, etc.) is
+    swallowed. A newer discovered version resets the "already notified"
+    marker; rediscovering the same one on the next scheduled check does
+    not.
+  - `update/notifier.py`: `AppContext.close()` -- run at the end of every
+    normal command, after its own output -- reads that same cache (never
+    GitHub) and prints "A newer RAGpilot version is available: X → Y" at
+    most once per version, always to stderr so it never lands inside a
+    `--json` payload or (`ragpilot serve --mcp`) the MCP stdio transport's
+    JSON-RPC channel.
+  - Both hooks wrapped in `contextlib.suppress` at the `AppContext` call
+    site: a bug in either must never break a command's own execution or
+    its exit code.
+  - Test-suite safety net: a new autouse fixture
+    (`tests/conftest.py::_disable_background_update_checks`) sets
+    `RAGPILOT_UPDATES__ENABLED=false` for every test by default --
+    without it, every existing test calling `AppContext.bootstrap()`
+    (hundreds of them) would have spawned a real detached subprocess
+    making a real GitHub request on every run.
+  - Manually verified end-to-end against the real repository: with a
+    simulated stale-but-populated cache, `ragpilot status` printed the
+    notification once (after its own table output, on stderr) and
+    correctly did not repeat it on the next invocation; with no cache,
+    the command still completed in well under a second while the
+    (real, unmocked) background check ran and -- as in Phase 3's own
+    validation -- found this repository's current release tag invalid
+    and silently wrote nothing, exactly the designed offline/failure
+    behavior.
