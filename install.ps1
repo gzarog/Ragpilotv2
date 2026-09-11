@@ -90,7 +90,11 @@ if (Test-Path $VenvDir) { Remove-Item -Recurse -Force $VenvDir }
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 Write-Host "Installing RAGpilot (this downloads its dependencies, including torch -- may take a few minutes)..."
 & $VenvPython -m pip install --quiet --upgrade pip
-& $VenvPython -m pip install --quiet $AppDir
+# Deliberately not --quiet here: pip's normal download/build progress output
+# is the only feedback during a multi-minute, multi-hundred-MB install (torch
+# chief among the dependencies) -- silencing it makes a slow-but-working
+# install indistinguishable from a hung one.
+& $VenvPython -m pip install $AppDir
 
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 $LauncherPath = Join-Path $BinDir "ragpilot.cmd"

@@ -66,7 +66,11 @@ rm -rf "$VENV_DIR"
 
 echo "Installing RAGpilot (this downloads its dependencies, including torch -- may take a few minutes)..."
 "$VENV_DIR/bin/pip" install --quiet --upgrade pip
-"$VENV_DIR/bin/pip" install --quiet "$APP_DIR"
+# Deliberately not --quiet here: pip's normal download/build progress output
+# is the only feedback during a multi-minute, multi-hundred-MB install (torch
+# chief among the dependencies) -- silencing it makes a slow-but-working
+# install indistinguishable from a hung one.
+"$VENV_DIR/bin/pip" install "$APP_DIR"
 
 mkdir -p "$BIN_DIR"
 ln -sf "$VENV_DIR/bin/ragpilot" "$BIN_DIR/ragpilot"
