@@ -9,7 +9,7 @@ import time
 
 from ragpilot.watcher.debounce import Debouncer
 
-_QUIET_MS = 60
+_QUIET_MS = 300
 
 
 def test_rapid_repeated_notifications_collapse_to_one_fire() -> None:
