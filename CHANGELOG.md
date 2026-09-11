@@ -1399,3 +1399,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the spawn flags alone -- there is no other way to catch this class of
   bug in CI, since a headless test run has no other visible trace of a
   window actually appearing.
+
+- `ragpilot install-agent` learned `--client NAME` (repeatable, or
+  `--client all`) to automatically register RAGpilot with a real MCP
+  client's own config file, not just print/write a generic snippet to a
+  path the user names. Four clients, each verified against its current
+  vendor docs rather than assumed from memory (schemas differ more than
+  expected -- VS Code's top-level key is `servers`, not `mcpServers`;
+  Cursor's server entries have no `type` field; Codex uses TOML, not
+  JSON):
+  - `claude-code`: project-scope `.mcp.json` (cwd), `{"mcpServers": {...}}`.
+  - `cursor`: project-scope `.cursor/mcp.json` (cwd), same shape, no `type`.
+  - `vscode`: workspace `.vscode/mcp.json` (cwd), `{"servers": {...}}`.
+  - `codex`: user-level `~/.codex/config.toml` (`.codex/config.toml`
+    project-scope exists too, but only takes effect once Codex has
+    separately marked that project "trusted", so the user-level file --
+    which works unconditionally -- is what this targets).
+
+  Every path is a hardcoded, documented location for that specific
+  client (nothing is discovered by scanning the filesystem), and only
+  the single `ragpilot` entry within that file is ever added or updated
+  -- every other server/setting already in the file is preserved
+  untouched, verified for both JSON (deep merge) and TOML (`tomllib` to
+  read/detect, since the standard library has no TOML writer; a new
+  entry is appended as raw text rather than risking a full-document
+  rewrite that could drop comments/formatting elsewhere in a file this
+  command didn't create). A JSON client's differing pre-existing
+  `ragpilot` entry is corrected in place (a single dict-key replace is
+  always structurally safe); Codex's TOML equivalent is left alone and
+  reported instead, since appending a second `[mcp_servers.ragpilot]`
+  table would be invalid TOML and corrupt the file. Re-running is always
+  safe: a matching entry is reported as already configured, not
+  duplicated. `--client` and `--write` are mutually exclusive.
