@@ -88,6 +88,34 @@ New-Item -ItemType Directory -Force -Path (Split-Path $AppDir -Parent) | Out-Nul
 Move-Item -Path $ExtractedDir.FullName -Destination $AppDir
 Remove-Item -Recurse -Force $ExtractRoot
 
+# Resolve a version to report via SETUPTOOLS_SCM_PRETEND_VERSION: the
+# downloaded zipball above has no .git for hatch-vcs to derive one from,
+# so it would otherwise always fall back to the hardcoded "0.0.0"
+# placeholder (see pyproject.toml's [tool.hatch.version]
+# fallback-version). $Ref is used directly when it already looks like
+# this project's own release-tag shape (an upgrade -- update/installer.py
+# always passes an exact, already-validated tag here); the default
+# "main" instead queries GitHub for the latest actual release, since
+# "main" itself isn't a version. Any other custom/branch $Ref is left
+# unresolved -- reporting an unrelated release's version for arbitrary
+# branch content would be actively misleading. A failed or missing
+# lookup (offline, no releases yet) just skips the override, same as
+# before this existed.
+$PretendVersion = $null
+if ($Ref -match '^[vV]?\d+\.\d+\.\d+$') {
+    $PretendVersion = $Ref -replace '^[vV]', ''
+} elseif ($Ref -eq "main") {
+    try {
+        $LatestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" `
+            -Headers @{ Accept = "application/vnd.github+json" }
+        if ($LatestRelease.tag_name -match '^[vV]?\d+\.\d+\.\d+$') {
+            $PretendVersion = $LatestRelease.tag_name -replace '^[vV]', ''
+        }
+    } catch {
+        Write-Host "Could not determine the latest release version (continuing without it): $_"
+    }
+}
+
 Write-Host "Creating virtual environment at $VenvDir..."
 # Any existing venv is renamed out of the way first, rather than deleted,
 # and the new one is then built fresh directly at $VenvDir -- never at a
@@ -135,7 +163,12 @@ Write-Host "(you may see `"Cache entry deserialization failed`" warnings below -
 # is the only feedback during a multi-minute, multi-hundred-MB install (torch
 # chief among the dependencies) -- silencing it makes a slow-but-working
 # install indistinguishable from a hung one.
-& $VenvPython -m pip install $AppDir
+if ($PretendVersion) { $env:SETUPTOOLS_SCM_PRETEND_VERSION = $PretendVersion }
+try {
+    & $VenvPython -m pip install $AppDir
+} finally {
+    if ($PretendVersion) { Remove-Item Env:\SETUPTOOLS_SCM_PRETEND_VERSION -ErrorAction SilentlyContinue }
+}
 
 # Best-effort: if the old venv above is still in use (a self-upgrade, the
 # running process's own files), this silently leaves it behind for the

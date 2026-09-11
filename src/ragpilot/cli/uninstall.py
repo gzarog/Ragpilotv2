@@ -53,8 +53,13 @@ def uninstall(
             console.print("Aborted; nothing was removed.")
             raise typer.Exit(code=0)
 
-    data_purged = False if keep_data else uninstall_ops.purge_home(home)
+    # Application removal must run before the data purge, not after: for
+    # both install.sh and install.ps1's default layout, the venv lives
+    # *inside* RAGPILOT_HOME (they share the same default root), so
+    # purging data first can delete the very interpreter `pip uninstall`
+    # (run via sys.executable) is about to need, breaking it outright.
     app_removed = uninstall_ops.remove_application(plan)
+    data_purged = False if keep_data else uninstall_ops.purge_home(home)
 
     result: dict[str, Any] = {
         "install_method": plan.method.value,

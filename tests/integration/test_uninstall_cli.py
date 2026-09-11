@@ -15,6 +15,7 @@ import pytest
 from typer.testing import CliRunner
 
 from ragpilot.cli.main import app
+from ragpilot.ops import uninstall as uninstall_ops
 
 
 def test_declining_confirmation_removes_nothing(
@@ -91,3 +92,26 @@ def test_both_yes_spellings_skip_the_prompt(
 
     assert result.exit_code == 0, result.output
     assert "Proceed?" not in result.output
+
+
+def test_app_removal_runs_before_the_data_purge(
+    ragpilot_home: Path, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # install.sh/install.ps1's default layout nests the venv *inside*
+    # RAGPILOT_HOME -- purging data before removing the application would
+    # delete the very interpreter a pip/pipx uninstall needs (see
+    # ops/uninstall.py's remove_application docstring). Order, not
+    # outcome, is what this test guards.
+    calls: list[str] = []
+    monkeypatch.setattr(
+        uninstall_ops, "remove_application", lambda plan: calls.append("remove_application") or True
+    )
+    monkeypatch.setattr(
+        uninstall_ops, "purge_home", lambda home: calls.append("purge_home") or True
+    )
+    assert runner.invoke(app, ["init"]).exit_code == 0
+
+    result = runner.invoke(app, ["uninstall", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == ["remove_application", "purge_home"]
