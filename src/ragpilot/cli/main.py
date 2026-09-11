@@ -27,6 +27,7 @@ from ragpilot.cli import (
     source,
     status,
     symbol,
+    uninstall,
     update,
     upgrade,
     vectors,
@@ -84,6 +85,9 @@ app.command("upgrade", help="Apply pending schema migrations, backing up first i
 app.command("ask", help="Ask a question, answered by an AI provider grounded in real evidence.")(
     ask.ask
 )
+app.command(
+    "uninstall", help="Remove the RAGpilot application and, by default, all of its data."
+)(uninstall.uninstall)
 
 
 if __name__ == "__main__":
