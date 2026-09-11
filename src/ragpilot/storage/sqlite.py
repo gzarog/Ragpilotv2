@@ -4,6 +4,10 @@ WAL + a busy timeout let a reader and the single writer coexist without
 "database is locked" errors under normal CLI usage; NORMAL synchronous is
 the standard WAL pairing (still durable across app crashes, only an OS
 crash can lose the last commit) traded for far less fsync overhead.
+``temp_store = MEMORY`` keeps FTS5/sort/join scratch space (e.g. a large
+``ORDER BY``) off disk, and a configurable page cache (blueprint section
+22) trades RAM for fewer page reads on repeated queries against the same
+database.
 """
 
 from __future__ import annotations
@@ -16,7 +20,7 @@ from pathlib import Path
 from ragpilot.core.errors import DatabaseError
 
 
-def connect(db_path: Path) -> sqlite3.Connection:
+def connect(db_path: Path, *, cache_size_mb: int = 64) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         # check_same_thread=False: Phase 7's daemon (service/daemon.py)
@@ -35,6 +39,10 @@ def connect(db_path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA synchronous = NORMAL")
     conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA temp_store = MEMORY")
+    # Negative cache_size is in KiB (SQLite: "approximately abs(N*1024)
+    # bytes"), not pages -- so this is a size in MB, not a page count.
+    conn.execute(f"PRAGMA cache_size = -{cache_size_mb * 1024}")
     return conn
 
 

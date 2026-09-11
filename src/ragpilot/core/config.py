@@ -27,6 +27,10 @@ class RuntimeConfig(BaseModel):
     max_workers: int = 6
     max_memory_mb: int = 4096
     temp_directory: str = "auto"
+    # Blueprint section 22: SQLite's page cache size, in MB, applied via
+    # PRAGMA cache_size on every connection this process opens -- see
+    # storage/sqlite.py.
+    sqlite_cache_size_mb: int = 64
 
 
 class IndexingConfig(BaseModel):

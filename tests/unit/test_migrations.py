@@ -59,3 +59,20 @@ def test_wal_mode_is_active(tmp_path: Path) -> None:
         assert mode == "wal"
     finally:
         conn.close()
+
+
+def test_temp_store_is_memory_and_cache_size_is_configurable(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "db.sqlite")
+    try:
+        # 2 = MEMORY (sqlite3's PRAGMA temp_store returns the mode as an int).
+        assert conn.execute("PRAGMA temp_store").fetchone()[0] == 2
+        # Negative cache_size is in KiB, so -65536 is the default 64MB.
+        assert conn.execute("PRAGMA cache_size").fetchone()[0] == -65536
+    finally:
+        conn.close()
+
+    custom = connect(tmp_path / "custom.sqlite", cache_size_mb=32)
+    try:
+        assert custom.execute("PRAGMA cache_size").fetchone()[0] == -32768
+    finally:
+        custom.close()
