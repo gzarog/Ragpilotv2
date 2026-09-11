@@ -71,6 +71,60 @@ def test_select_backend_auto_prefers_usearch(tmp_path: Path) -> None:
     assert isinstance(index, ann.USearchAnnIndex)
 
 
+def test_select_backend_warm_reuses_the_same_instance_across_calls(tmp_path: Path) -> None:
+    """Blueprint section 25: repeated calls against an unchanged on-disk
+    index must return the exact same in-memory ``USearchAnnIndex`` (not
+    just an equivalent one) -- the whole point is skipping the disk
+    ``load()`` on every search.
+    """
+    ann.reset_warm_cache()
+    index_path = tmp_path / "v.usearch"
+    written = ann.USearchAnnIndex(ndim=3, path=index_path)
+    written.add([1, 2], [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    written.save()
+
+    first, backend = ann.select_backend_warm("auto", ndim=3, index_path=index_path)
+    assert backend == "usearch"
+    second, _ = ann.select_backend_warm("auto", ndim=3, index_path=index_path)
+    assert second is first
+
+
+def test_select_backend_warm_reloads_after_a_save_changes_mtime(tmp_path: Path) -> None:
+    """A write to the index file (mirrors ``sync_index_for_files``/
+    ``rebuild_index`` running in this same process between two searches)
+    must be picked up on the very next call, never served stale.
+    """
+    ann.reset_warm_cache()
+    index_path = tmp_path / "v.usearch"
+    written = ann.USearchAnnIndex(ndim=3, path=index_path)
+    written.add([1], [[1.0, 0.0, 0.0]])
+    written.save()
+
+    first, _ = ann.select_backend_warm("auto", ndim=3, index_path=index_path)
+    assert len(first) == 1
+
+    # A later save (e.g. from an indexing pass) always goes through a
+    # freshly constructed instance, never the warm cache -- exactly what
+    # rebuild_index/sync_index_for_files already do.
+    rewritten = ann.USearchAnnIndex(ndim=3, path=index_path)
+    rewritten.add([1, 2], [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    rewritten.save()
+
+    second, _ = ann.select_backend_warm("auto", ndim=3, index_path=index_path)
+    assert second is not first
+    assert len(second) == 2
+
+
+def test_select_backend_warm_bypasses_cache_for_bruteforce(tmp_path: Path) -> None:
+    ann.reset_warm_cache()
+    index_path = tmp_path / "v.usearch"
+    first, backend = ann.select_backend_warm("bruteforce", ndim=3, index_path=index_path)
+    assert backend == "bruteforce"
+    second, _ = ann.select_backend_warm("bruteforce", ndim=3, index_path=index_path)
+    assert second is not first
+    assert not ann._warm_cache
+
+
 def _seed_vector_items(conn, *, file_id: str, count: int, model_id: str = MODEL) -> list[int]:
     ids = []
     with transaction(conn):

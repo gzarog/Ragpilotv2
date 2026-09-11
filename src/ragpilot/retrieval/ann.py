@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import sqlite3
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Protocol
@@ -164,6 +165,78 @@ class USearchAnnIndex:
 
     def __len__(self) -> int:
         return len(self._index)  # type: ignore[arg-type]
+
+
+_warm_lock = threading.Lock()
+# Keyed by the index file's own path; each entry is the mtime it was last
+# loaded/saved at plus the loaded index itself. See select_backend_warm.
+_warm_cache: dict[str, tuple[int, AnnIndex]] = {}
+
+
+def _index_mtime_ns(path: Path) -> int:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return -1
+
+
+def reset_warm_cache() -> None:
+    """Drops every process-cached ``USearchAnnIndex`` (not just their
+    on-disk backing) -- used by the test suite for the same isolation
+    reason ``retrieval/cache.py``'s ``reset_caches`` exists, and
+    available to any long-lived caller that wants to force a full reload.
+    """
+    with _warm_lock:
+        _warm_cache.clear()
+
+
+def select_backend_warm(engine: str, *, ndim: int, index_path: Path) -> tuple[AnnIndex, str]:
+    """Like ``select_backend``, but keeps a loaded ``USearchAnnIndex``
+    resident in this process across calls (blueprint section 25: "the
+    daemon keeps ... USearch indexes in memory") instead of reconstructing
+    and reloading it from disk on every search -- the gap between the
+    embedding model's own already-warm ``retrieval/embedder.py`` cache and
+    this index, which previously reloaded from disk on every single
+    ``semantic_search`` call even inside a long-running process like
+    ``ragpilot serve``.
+
+    Freshness is checked on every call via the index file's own mtime
+    (``os.stat``, not an explicit invalidation call) -- the same "cheap
+    check, no cache-clear API to keep in sync with every writer" approach
+    ``retrieval/cache.py`` uses for query results, there via SQLite's
+    ``PRAGMA data_version``; a ``USearch`` index has no equivalent
+    built-in counter, but its writers (``sync_index_for_files``,
+    ``rebuild_index``) always go through ``USearchAnnIndex.save``'s
+    atomic tmp-file-then-``os.replace``, which reliably bumps mtime on
+    every save, including from another process. A stale mtime is simply
+    never used again -- no separate invalidation path to keep in sync.
+
+    ``"bruteforce"`` bypasses the cache entirely: it has no on-disk file
+    of its own to key freshness on (see ``BruteForceAnnIndex``'s
+    docstring), and its caller already repopulates it from
+    ``vector_items`` fresh on every call where it's empty.
+
+    Read-only concurrent ``search()`` calls against one cached, shared
+    ``USearchAnnIndex`` instance (e.g. two MCP tool calls handled
+    concurrently) are safe: only the indexing path -- which never uses
+    this warm cache, always going through a freshly constructed
+    ``select_backend`` instance instead -- ever calls ``add``/``remove``.
+    """
+    if engine == "bruteforce":
+        return select_backend(engine, ndim=ndim, index_path=index_path)
+
+    key = str(index_path)
+    mtime_ns = _index_mtime_ns(index_path)
+    with _warm_lock:
+        cached = _warm_cache.get(key)
+        if cached is not None and cached[0] == mtime_ns:
+            return cached[1], "usearch"
+
+    index, backend = select_backend(engine, ndim=ndim, index_path=index_path)
+    if backend == "usearch":
+        with _warm_lock:
+            _warm_cache[key] = (mtime_ns, index)
+    return index, backend
 
 
 def select_backend(

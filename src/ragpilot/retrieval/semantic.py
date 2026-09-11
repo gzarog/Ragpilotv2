@@ -155,7 +155,10 @@ def _search_source_via_ann(
         # to the brute-force-over-vector_items path below instead.
         engine = "bruteforce"
 
-    index, backend = ann.select_backend(engine, ndim=dim, index_path=index_path)
+    # Warm variant (blueprint section 25): reuses an already-loaded index
+    # resident in this process instead of reloading it from disk on every
+    # search -- see ann.select_backend_warm's docstring.
+    index, backend = ann.select_backend_warm(engine, ndim=dim, index_path=index_path)
     if backend == "bruteforce" and len(index) == 0:
         all_vectors = vector_items_repo.list_all_with_vectors(conn, model_id=model_id)
         if not all_vectors:

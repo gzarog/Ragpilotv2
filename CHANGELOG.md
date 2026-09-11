@@ -950,3 +950,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     *every* file of that type. Changed to AND: a multi-token path query
     now means "these tokens together," which a single-token query (the
     common case) behaves identically under either way.
+
+- Search Performance Redesign, follow-up: a warm, process-resident ANN
+  index (blueprint section 25: "the daemon keeps ... USearch indexes in
+  memory"). `retrieval/semantic.py`'s hot path previously reconstructed
+  and reloaded `USearchAnnIndex` from disk on *every* `semantic_search`
+  call, even inside a long-running process like `ragpilot serve` --
+  unlike `retrieval/embedder.py`'s embedding model, which was already
+  cached process-globally. New `ann.select_backend_warm` keeps a loaded
+  index resident, keyed by the index file's own path, and checks its
+  mtime on every call (no explicit invalidation call, mirroring
+  `retrieval/cache.py`'s `PRAGMA data_version` freshness check for query
+  results) so a write from `sync_index_for_files`/`rebuild_index` -- in
+  this process or another -- is always picked up on the very next
+  search. `select_backend` itself is unchanged and still used by every
+  indexing-path caller, which always wants a fresh, freely mutable
+  instance rather than the shared cached one.
