@@ -89,19 +89,25 @@ Move-Item -Path $ExtractedDir.FullName -Destination $AppDir
 Remove-Item -Recurse -Force $ExtractRoot
 
 Write-Host "Creating virtual environment at $VenvDir..."
-# Built side-by-side as "$VenvDir.new" rather than deleted-and-recreated in
-# place: `ragpilot update install` re-runs this exact script from inside
-# the currently-running $VenvDir\Scripts\ragpilot.exe. On Windows, deleting
-# or overwriting that file while its own process is executing fails with a
-# sharing violation ("[WinError 32] ... being used by another process"),
-# which pip hits partway through installing into a venv rebuilt in place.
-# Building fresh at a different path sidesteps the running files entirely;
-# only the final swap below touches $VenvDir itself, and a directory rename
-# (unlike an in-place delete/overwrite) succeeds even while a file inside it
-# is open. Stale left-behind directories from an interrupted previous run
-# are cleaned up first -- safe, since nothing still has them open.
-$VenvDirNew = "$VenvDir.new"
-$VenvDirOld = "$VenvDir.old"
+# Built side-by-side at "${VenvDir}.new" rather than deleted-and-recreated
+# in place: `ragpilot update install` re-runs this exact script from
+# inside the currently-running $VenvDir\Scripts\ragpilot.exe. On Windows,
+# deleting or overwriting that file while its own process is executing
+# fails with a sharing violation ("[WinError 32] ... being used by
+# another process"), which pip hits partway through installing into a
+# venv rebuilt in place. Building fresh at a different path sidesteps the
+# running files entirely; only the final swap below touches $VenvDir
+# itself, and a directory rename (unlike an in-place delete/overwrite)
+# succeeds even while a file inside it is open. Stale left-behind
+# directories from an interrupted previous run are cleaned up first --
+# safe, since nothing still has them open. (${VenvDir}, not bare
+# $VenvDir, immediately before the literal ".new"/".old" text: PowerShell
+# parses a bare "$VenvDir.new" in a double-quoted string as member access
+# -- $VenvDir.new -- not concatenation; since strings have no such
+# property, it silently evaluates to empty rather than erroring, leaving
+# these two variables equal to $VenvDir itself.)
+$VenvDirNew = "${VenvDir}.new"
+$VenvDirOld = "${VenvDir}.old"
 if (Test-Path $VenvDirOld) { Remove-Item -Recurse -Force $VenvDirOld -ErrorAction SilentlyContinue }
 if (Test-Path $VenvDirNew) { Remove-Item -Recurse -Force $VenvDirNew -ErrorAction SilentlyContinue }
 & $Python.Exe @($Python.Args) -m venv $VenvDirNew
