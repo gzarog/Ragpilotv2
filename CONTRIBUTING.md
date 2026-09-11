@@ -112,6 +112,49 @@ default suite. CI runs `embedding_model` tests too, in the same style as
 `docling_pdf`: a separate, non-blocking (`continue-on-error`) job -- see
 `.github/workflows/ci.yml`.
 
+### The `benchmark_search` marker and `benchmarks/search/`
+
+The search performance redesign's benchmark suite (`benchmarks/search/`,
+a top-level package alongside `src/` and `tests/` -- see its own
+docstring) generates a synthetic corpus directly through the storage
+repositories (no Tree-sitter/Docling parsing, no real embedding model)
+and measures real query latency against it. Its pytest coverage
+(`tests/integration/test_search_benchmarks.py`) is marked
+`@pytest.mark.benchmark_search` and excluded from the default run the
+same way `docling_pdf`/`daemon_subprocess`/`embedding_model` are, since
+its millisecond numbers are only meaningful on real, unshared hardware
+(a busy CI runner missing a target is not a regression signal -- see
+`benchmarks/search/targets.py`). Run it explicitly:
+
+```bash
+pytest -m benchmark_search -q -s
+```
+
+That runs the fast `small` (5k-embedding) corpus size. Larger sizes
+(`medium`/`large`/`very_large`, per the blueprint's own suggested
+scale) are opt-in, both for the pytest coverage and the standalone
+script:
+
+```bash
+RAGPILOT_BENCHMARK_SIZE=medium pytest -m benchmark_search -q -s
+python -m benchmarks.search --size large --strict
+```
+
+`--strict` is the form that actually enforces the blueprint's
+performance targets (section 36) -- meant for a real developer machine,
+not CI, which runs `benchmark_search` tests in the same non-blocking
+style as `docling_pdf`/`embedding_model` (see `.github/workflows/
+ci.yml`) and only asserts the pipeline itself works (every category
+finds its known fixture), never the wall-clock numbers.
+
+Search *quality* (not speed) has a separate, always-on regression test:
+`tests/integration/test_search_quality.py` indexes a small, fixed
+fixture project through the real CLI pipeline and evaluates every query
+in `benchmarks/search/golden_queries.yaml` (blueprint section 37) via
+Recall@5/@10, MRR, and NDCG@10 (`benchmarks/search/quality.py`) --
+this one *does* run in the default suite, since it is fast, offline,
+and deterministic.
+
 ### The install scripts (`install.sh` / `install.ps1`)
 
 `install.sh` and `install.ps1` at the repo root are what `README.md`'s

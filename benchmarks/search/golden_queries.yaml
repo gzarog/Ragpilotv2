@@ -1,0 +1,50 @@
+# Golden query set for search quality regression testing (blueprint
+# section 37). Each entry generalizes the blueprint's own
+# `expected`/`expected_paths`/`expected_documents` examples into one
+# uniform `expected` list of {kind, path} pairs -- the relevant set a
+# query's top results are scored against (Recall@5/@10, MRR, NDCG@10;
+# see benchmarks/search/quality.py).
+#
+# Evaluated against the fixture project built by
+# tests/integration/test_search_quality.py's `_write_project` -- change
+# one without the other and this file's paths/queries stop resolving to
+# anything.
+- query: SettlementService
+  expected:
+    - {kind: entity, path: services/settlement_service.py}
+
+- query: services.settlement_service.SettlementService.process
+  expected:
+    - {kind: entity, path: services/settlement_service.py}
+
+- query: SettlementService.process
+  expected:
+    - {kind: entity, path: services/settlement_service.py}
+
+- query: settlement_service.py
+  # An entity defined in this file legitimately outranks the bare path
+  # hit itself (lexical.py's FTS tier sits above its PATH tier) -- both
+  # correctly answer "where is settlement_service.py".
+  expected:
+    - {kind: path, path: services/settlement_service.py}
+    - {kind: entity, path: services/settlement_service.py}
+
+- query: cholesterol
+  expected:
+    - {kind: document, path: docs/health_notes.md}
+
+- query: settlement retry
+  # The code entities that actually implement settlement retry are just
+  # as relevant an answer here as the prose document describing it.
+  expected:
+    - {kind: document, path: docs/settlement_guide.md}
+    - {kind: entity, path: services/settlement_service.py}
+    - {kind: entity, path: workers/retry_worker.py}
+
+- query: how are provider settlements retried
+  expected:
+    - {kind: document, path: docs/settlement_guide.md}
+
+- query: cardiovascular risk
+  expected:
+    - {kind: document, path: docs/health_notes.md}

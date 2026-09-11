@@ -67,10 +67,19 @@ def search_by_substring(
 
 
 def _path_fts_query(text: str) -> str | None:
+    """Every token ANDed together, unlike ``lexical.py``'s permissive
+    per-word-OR content queries: a path fragment's tokens routinely
+    include the file extension (``"py"``, ``"md"``, ...), and OR-ing that
+    in as its own clause would match *every* file of that type. AND
+    keeps a multi-token fragment precise -- exactly the tokens the user
+    typed, together -- while a single-token query (the overwhelmingly
+    common case: one filename or directory name) behaves identically
+    either way.
+    """
     tokens = re.findall(r"\w+", text)
     if not tokens:
         return None
-    return " OR ".join(f'"{t}"' for t in tokens)
+    return " AND ".join(f'"{t}"' for t in tokens)
 
 
 def search_path_projection(
