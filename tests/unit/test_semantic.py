@@ -28,7 +28,12 @@ from ragpilot.retrieval import embedder
 from ragpilot.retrieval.semantic import semantic_search
 from ragpilot.sources.registry import SourceRegistry
 from ragpilot.storage.migrations import apply_migrations
-from ragpilot.storage.repositories import embeddings_repo, entities_repo, files_repo
+from ragpilot.storage.repositories import (
+    embeddings_repo,
+    entities_repo,
+    files_repo,
+    vector_items_repo,
+)
 from ragpilot.storage.sqlite import transaction
 
 
@@ -161,6 +166,14 @@ def test_enabled_semantic_search_ranks_stored_embeddings_by_cosine_similarity(
             model_id=embedder.EMBEDDING_MODEL_ID,
             vector=[1.0, 0.0, 0.0],
         )
+        vector_items_repo.insert(
+            conn,
+            subject_type=EmbeddingSubjectType.ENTITY,
+            subject_id="e_close",
+            file_id="f1",
+            source_id=project_id,
+            model_id=embedder.EMBEDDING_MODEL_ID,
+        )
         embeddings_repo.insert(
             conn,
             subject_type=EmbeddingSubjectType.ENTITY,
@@ -169,6 +182,14 @@ def test_enabled_semantic_search_ranks_stored_embeddings_by_cosine_similarity(
             source_id=project_id,
             model_id=embedder.EMBEDDING_MODEL_ID,
             vector=[0.0, 1.0, 0.0],
+        )
+        vector_items_repo.insert(
+            conn,
+            subject_type=EmbeddingSubjectType.ENTITY,
+            subject_id="e_far",
+            file_id="f1",
+            source_id=project_id,
+            model_id=embedder.EMBEDDING_MODEL_ID,
         )
         # A stale row tagged with a different (superseded) model id --
         # must never be scored against a query vector from the current

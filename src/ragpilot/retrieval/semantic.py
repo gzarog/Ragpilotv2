@@ -2,10 +2,10 @@
 ``planner.py`` has called into since Phase 5.
 
 Embeds the query with the same model used to embed indexed content
-(``retrieval/embedder.py``), scores it against every current-model
-embedding in the project via brute-force cosine similarity
-(``retrieval/vectorstore.py``), and returns ranked hits in a shape
-deliberately close to ``retrieval/lexical.py``'s ``SearchResult`` --
+(``retrieval/embedder.py``), scores it against the project's persistent
+ANN index (``retrieval/ann.py``, USearch HNSW by default), and returns
+ranked hits in a shape deliberately close to
+``retrieval/lexical.py``'s ``SearchResult`` --
 ``kind``/``id``/``title``/``path``/``source_id``/``snippet``/``location``
 line up field-for-field so a caller can render or evidence-ify a
 ``SemanticHit`` the same way it already does a lexical hit, plus one
@@ -35,17 +35,9 @@ from ragpilot.code.graph import all_project_connections
 from ragpilot.core import paths
 from ragpilot.core.config import SearchConfig
 from ragpilot.core.lifecycle import AppContext
-from ragpilot.core.models import EmbeddingSubjectType
-from ragpilot.retrieval import ann, embedder, vectorstore
+from ragpilot.retrieval import ann, embedder
 from ragpilot.retrieval import cache as search_cache
-from ragpilot.storage.repositories import (
-    documents_repo,
-    embeddings_repo,
-    entities_repo,
-    files_repo,
-    vector_items_repo,
-)
-from ragpilot.storage.repositories.embeddings_repo import EmbeddingRow
+from ragpilot.storage.repositories import embeddings_repo, vector_items_repo
 
 DEFAULT_LIMIT = 15
 
@@ -82,43 +74,6 @@ class SemanticSearchResult:
     results: tuple[SemanticHit, ...] = field(default_factory=tuple)
 
 
-def _hit_from_row(conn: Any, source_id: str, row: EmbeddingRow, score: float) -> SemanticHit | None:
-    if row.subject_type is EmbeddingSubjectType.ENTITY:
-        entity = entities_repo.get(conn, row.subject_id)
-        if entity is None:
-            return None
-        file = files_repo.get(conn, entity.file_id)
-        return SemanticHit(
-            kind="entity",
-            id=entity.id,
-            title=entity.qualified_name,
-            path=file.path if file is not None else entity.file_id,
-            source_id=source_id,
-            score=score,
-            snippet=entity.signature or entity.qualified_name,
-            location={"line_start": entity.start_line, "line_end": entity.end_line},
-        )
-
-    unit = documents_repo.get_unit(conn, row.subject_id)
-    if unit is None:
-        return None
-    file = files_repo.get(conn, unit.file_id)
-    document = documents_repo.get_document(conn, unit.document_id)
-    title = (document.title if document is not None and document.title else None) or (
-        file.path if file is not None else unit.file_id
-    )
-    return SemanticHit(
-        kind="document",
-        id=unit.id,
-        title=title,
-        path=file.path if file is not None else unit.file_id,
-        source_id=source_id,
-        score=score,
-        snippet=unit.text[:280],
-        location={"section": " > ".join(unit.heading_path) if unit.heading_path else None},
-    )
-
-
 def _search_source_via_ann(
     conn: Any,
     *,
@@ -132,8 +87,11 @@ def _search_source_via_ann(
 ) -> list[SemanticHit] | None:
     """One source's ANN-backed candidates plus their batched metadata
     lookup (blueprint sections 12/47), or ``None`` when this source has
-    no ANN data available at all -- the signal ``semantic_search`` uses
-    to fall back to its original full-scan path for that source only.
+    no embeddings for ``model_id`` at all -- the signal ``semantic_search``
+    uses to skip this source entirely. Indexing always writes
+    ``vector_items`` in the same pass as ``embeddings`` (see
+    ``indexing/runner.py``), so there is no supported state where
+    embeddings exist without a corresponding ANN entry to search.
 
     The brute-force backend has no persistence of its own (see
     ``retrieval/ann.py``'s ``BruteForceAnnIndex`` docstring), so it is
@@ -264,25 +222,13 @@ def semantic_search(
             model_id=model_id,
             engine=config.vector.engine,
         )
-        if ann_hits is not None:
-            hits.extend(ann_hits)
+        if ann_hits is None:
+            # No embeddings for this model in this source at all -- see
+            # ``_search_source_via_ann``'s docstring for why that is the
+            # only reason it returns ``None`` (never "no ANN index yet
+            # for otherwise-present embeddings").
             continue
-
-        # Backward-compatible fallback (blueprint section 29): this
-        # source has embeddings but no ``vector_items`` yet (indexed
-        # before this feature existed, or the ANN index hasn't been
-        # synced since) -- the original brute-force scan still works
-        # unchanged, and the next reindex of any touched file starts
-        # populating ``vector_items`` for it.
-        rows = embeddings_repo.list_by_model(conn, model_id)
-        if not rows:
-            continue
-        candidates = [(row.id, row.vector) for row in rows]
-        by_id = {row.id: row for row in rows}
-        for candidate in vectorstore.top_k(query_vector, candidates, k=k):
-            hit = _hit_from_row(conn, source_id, by_id[candidate.key], candidate.score)
-            if hit is not None:
-                hits.append(hit)
+        hits.extend(ann_hits)
 
     if not hits:
         return SemanticSearchResult(

@@ -53,7 +53,25 @@ Write-Host "Using $pythonVersion at $($Python.Exe) $($Python.Args -join ' ')"
 
 Write-Host "Downloading RAGpilot ($Ref)..."
 $ZipPath = Join-Path ([System.IO.Path]::GetTempPath()) "ragpilot-$([guid]::NewGuid()).zip"
-Invoke-WebRequest -Uri "https://github.com/$Repo/archive/refs/heads/$Ref.zip" -OutFile $ZipPath -UseBasicParsing
+$DownloadUrl = "https://github.com/$Repo/archive/refs/heads/$Ref.zip"
+# GitHub's archive/codeload endpoint can briefly 404 a branch that was just
+# pushed (its zipball cache lags the push by a few seconds) -- retry a
+# handful of times with linear backoff before giving up, rather than
+# failing outright on what is usually a transient race.
+$maxAttempts = 5
+for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+    try {
+        Invoke-WebRequest -Uri $DownloadUrl -OutFile $ZipPath -UseBasicParsing
+        break
+    } catch {
+        if ($attempt -ge $maxAttempts) {
+            Write-Error "Failed to download $DownloadUrl after $attempt attempts: $_"
+            exit 1
+        }
+        Write-Host "Download attempt $attempt failed, retrying in ${attempt}s..."
+        Start-Sleep -Seconds $attempt
+    }
+}
 
 $ExtractRoot = Join-Path ([System.IO.Path]::GetTempPath()) "ragpilot-extract-$([guid]::NewGuid())"
 Expand-Archive -Path $ZipPath -DestinationPath $ExtractRoot -Force

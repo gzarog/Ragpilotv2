@@ -39,7 +39,22 @@ echo "Using $("$PYTHON" --version) at $(command -v "$PYTHON")"
 TARBALL="$(mktemp)"
 trap 'rm -f "$TARBALL"' EXIT
 echo "Downloading RAGpilot ($REF)..."
-curl -fsSL "https://github.com/$REPO/archive/refs/heads/$REF.tar.gz" -o "$TARBALL"
+DOWNLOAD_URL="https://github.com/$REPO/archive/refs/heads/$REF.tar.gz"
+# GitHub's archive/codeload endpoint can briefly 404 a branch that was just
+# pushed (its tarball cache lags the push by a few seconds) -- retry a
+# handful of times with linear backoff before giving up, rather than
+# failing outright on what is usually a transient race.
+attempt=1
+max_attempts=5
+until curl -fsSL "$DOWNLOAD_URL" -o "$TARBALL"; do
+    if [ "$attempt" -ge "$max_attempts" ]; then
+        echo "error: failed to download $DOWNLOAD_URL after $attempt attempts" >&2
+        exit 1
+    fi
+    echo "Download attempt $attempt failed, retrying in ${attempt}s..." >&2
+    sleep "$attempt"
+    attempt=$((attempt + 1))
+done
 
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR"
