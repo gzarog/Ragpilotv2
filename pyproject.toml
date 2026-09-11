@@ -109,11 +109,25 @@ packages = ["src/ragpilot"]
 # version -- an immutable git tag (v0.1.8, ...) -- instead of a value
 # duplicated by hand across this file and src/ragpilot/__init__.py. This
 # writes src/ragpilot/_version.py (gitignored, generated) at build/install
-# time; __init__.py imports __version__ from it. No tag yet (or an
-# editable install with no tags reachable) falls back to a
-# "0.1.dev<N>+g<sha>"-shaped dev version -- never a hard failure.
+# time; __init__.py imports __version__ from it.
 [tool.hatch.version]
 source = "vcs"
+# Installing from a plain source tarball/zipball (install.sh/install.ps1's
+# own `curl`/`Invoke-WebRequest` download of a branch archive) has no
+# `.git` directory at all -- setuptools-scm (which hatch-vcs wraps) can't
+# detect a version there and would otherwise hard-fail the whole install.
+fallback-version = "0.0.0"
+
+[tool.hatch.version.raw-options]
+# This repository's very first release predates this plan's tagging
+# convention (tagged "ragpilot_0_1_0", not "v0.1.0") and still exists
+# alongside real "v*.*.*" tags going forward. setuptools-scm's own tag
+# selection (via `git describe`) picks the *nearest* tag unconditionally
+# and only *then* tries to parse it -- an unparseable nearest tag is a
+# hard error, not a "keep looking" -- so `--match` here excludes it from
+# ever being selected in the first place, rather than trying (and
+# failing) to make tag-pattern/tag_regex parse it after the fact.
+git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--match", "v*.*.*"]
 
 [tool.hatch.build.hooks.vcs]
 version-file = "src/ragpilot/_version.py"

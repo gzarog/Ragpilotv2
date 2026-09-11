@@ -1196,3 +1196,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     against several tag sets (none, sequential, double-digit components
     like `v0.1.9`→`v0.1.10`, mixed major versions) via `sort -V`, which
     orders them numerically rather than lexicographically.
+  - **Two real bugs this surfaced in CI, both in the hatch-vcs config,
+    fixed in this same change**: (1) `pip install`-ing from a plain
+    source tarball/zipball (exactly what `install.sh`/`install.ps1`
+    download) has no `.git` directory at all, and setuptools-scm (which
+    hatch-vcs wraps) hard-failed the entire install rather than falling
+    back -- fixed with `fallback-version = "0.0.0"`. (2) this
+    repository's actual first release predates this plan's tagging
+    convention (tagged `ragpilot_0_1_0`, not `v0.1.0`) and, once
+    `fetch-depth: 0` made every tag reachable, setuptools-scm's tag
+    selection (`git describe`, unconditional nearest-tag, parsed only
+    *after* selection) picked that one and hard-failed trying to parse
+    it as a version -- `tag-pattern`/`tag_regex` only affects parsing
+    *after* selection, so it can't prevent this; fixed with a
+    `[tool.hatch.version.raw-options]` `git_describe_command` override
+    adding `--match 'v*.*.*'`, which excludes it from ever being
+    selected as a candidate in the first place. Both reproduced and
+    fixed locally against this repository's actual tag before pushing:
+    a real archive with no `.git` now builds `ragpilot-0.0.0`; a `.git`
+    checkout with only the `ragpilot_0_1_0` tag reachable now builds a
+    `0.0.1.dev<N>+g<sha>` dev version instead of failing outright; a
+    clean `v0.1.0` tag at HEAD still builds exactly `ragpilot-0.1.0`.
