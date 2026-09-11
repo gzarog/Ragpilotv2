@@ -65,6 +65,31 @@ def test_cli_override_wins_over_everything(tmp_path: Path) -> None:
     assert config.runtime.log_level == "critical"
 
 
+def test_updates_defaults(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    cwd = tmp_path / "cwd"
+    config = load_config(home=home, cwd=cwd, environ={})
+    assert config.updates.enabled is True
+    assert config.updates.check_interval_hours == 24
+    assert config.updates.notify is True
+    assert config.updates.channel == "stable"
+
+
+def test_updates_env_var_overrides(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    cwd = tmp_path / "cwd"
+    config = load_config(
+        home=home,
+        cwd=cwd,
+        environ={
+            "RAGPILOT_UPDATES__ENABLED": "false",
+            "RAGPILOT_UPDATES__CHECK_INTERVAL_HOURS": "6",
+        },
+    )
+    assert config.updates.enabled is False
+    assert config.updates.check_interval_hours == 6
+
+
 def test_env_var_type_coercion(tmp_path: Path) -> None:
     home = tmp_path / "home"
     cwd = tmp_path / "cwd"

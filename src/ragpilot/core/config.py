@@ -160,6 +160,23 @@ class TelemetryConfig(BaseModel):
     anonymous_usage: bool = False
 
 
+class UpdatesConfig(BaseModel):
+    """CLI performance improvement plan, Phase 4: automatic update
+    checking/notification. ``enabled=false`` disables both the background
+    check (``update/background.py``) and the startup notification
+    (``update/notifier.py``) entirely -- useful for enterprise/offline
+    environments (see the plan's Configuration/Offline Behavior
+    sections). ``channel`` is reserved for a future non-stable release
+    channel; this repository only ever publishes one today, so it is
+    accepted and stored but not yet acted on.
+    """
+
+    enabled: bool = True
+    check_interval_hours: int = 24
+    notify: bool = True
+    channel: str = "stable"
+
+
 class RagpilotConfig(BaseModel):
     version: int = 1
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
@@ -173,6 +190,7 @@ class RagpilotConfig(BaseModel):
     privacy: PrivacyConfig = Field(default_factory=PrivacyConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     ai: AiConfig = Field(default_factory=AiConfig)
+    updates: UpdatesConfig = Field(default_factory=UpdatesConfig)
 
 
 _KNOWN_SECTIONS = {
@@ -188,6 +206,7 @@ _KNOWN_SECTIONS = {
     "privacy",
     "telemetry",
     "ai",
+    "updates",
 }
 
 
