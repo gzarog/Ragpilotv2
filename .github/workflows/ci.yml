@@ -278,3 +278,31 @@ jobs:
           if (-not (Test-Path $infoPath)) { throw "missing $infoPath" }
           $info = Get-Content $infoPath -Raw | ConvertFrom-Json
           if ($info.install_method -ne "install-script") { throw "unexpected install_method: $($info.install_method)" }
+      # Regression test for the Windows self-upgrade bug `ragpilot update
+      # install` hits: it re-runs this same install.ps1 from inside the
+      # currently-running venv\Scripts\ragpilot.exe. Simulate that file
+      # being locked by holding an exclusive-write file handle on it (the
+      # same sharing violation a running PE image causes) across a second
+      # install.ps1 run, and confirm the run still succeeds and the CLI
+      # still works afterward -- proving the side-by-side-venv-then-rename
+      # swap in install.ps1 doesn't need that file to be free.
+      - name: Re-run install.ps1 while the installed exe is locked (self-upgrade simulation)
+        env:
+          RAGPILOT_REF: ${{ github.head_ref || github.ref_name }}
+          RAGPILOT_INSTALL_DIR: ${{ runner.temp }}\ragpilot-install
+          RAGPILOT_BIN_DIR: ${{ runner.temp }}\ragpilot-bin
+          RAGPILOT_HOME: ${{ runner.temp }}\ragpilot-home
+        run: |
+          $exePath = "${{ runner.temp }}\ragpilot-install\venv\Scripts\ragpilot.exe"
+          $lock = [System.IO.File]::Open($exePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+          try {
+              ./install.ps1
+          } finally {
+              $lock.Dispose()
+          }
+      - name: Verify the installed CLI still works after the locked re-run
+        env:
+          RAGPILOT_HOME: ${{ runner.temp }}\ragpilot-home
+        run: |
+          & "${{ runner.temp }}\ragpilot-bin\ragpilot.cmd" version
+          & "${{ runner.temp }}\ragpilot-bin\ragpilot.cmd" doctor

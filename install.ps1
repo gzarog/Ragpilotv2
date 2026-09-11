@@ -89,10 +89,24 @@ Move-Item -Path $ExtractedDir.FullName -Destination $AppDir
 Remove-Item -Recurse -Force $ExtractRoot
 
 Write-Host "Creating virtual environment at $VenvDir..."
-if (Test-Path $VenvDir) { Remove-Item -Recurse -Force $VenvDir }
-& $Python.Exe @($Python.Args) -m venv $VenvDir
+# Built side-by-side as "$VenvDir.new" rather than deleted-and-recreated in
+# place: `ragpilot update install` re-runs this exact script from inside
+# the currently-running $VenvDir\Scripts\ragpilot.exe. On Windows, deleting
+# or overwriting that file while its own process is executing fails with a
+# sharing violation ("[WinError 32] ... being used by another process"),
+# which pip hits partway through installing into a venv rebuilt in place.
+# Building fresh at a different path sidesteps the running files entirely;
+# only the final swap below touches $VenvDir itself, and a directory rename
+# (unlike an in-place delete/overwrite) succeeds even while a file inside it
+# is open. Stale left-behind directories from an interrupted previous run
+# are cleaned up first -- safe, since nothing still has them open.
+$VenvDirNew = "$VenvDir.new"
+$VenvDirOld = "$VenvDir.old"
+if (Test-Path $VenvDirOld) { Remove-Item -Recurse -Force $VenvDirOld -ErrorAction SilentlyContinue }
+if (Test-Path $VenvDirNew) { Remove-Item -Recurse -Force $VenvDirNew -ErrorAction SilentlyContinue }
+& $Python.Exe @($Python.Args) -m venv $VenvDirNew
 
-$VenvPython = Join-Path $VenvDir "Scripts\python.exe"
+$VenvPython = Join-Path $VenvDirNew "Scripts\python.exe"
 Write-Host "Installing RAGpilot (this downloads its dependencies, including torch -- may take a few minutes)..."
 & $VenvPython -m pip install --quiet --upgrade pip
 # Purge pip's cache before the real install: an entry written by whatever
@@ -112,6 +126,15 @@ Write-Host "(you may see `"Cache entry deserialization failed`" warnings below -
 # chief among the dependencies) -- silencing it makes a slow-but-working
 # install indistinguishable from a hung one.
 & $VenvPython -m pip install $AppDir
+
+# Swap the new venv into place. If something (e.g. the very process running
+# this script, during a self-upgrade) still has a file in $VenvDir open, the
+# rename to $VenvDirOld leaves it in place under a different name rather
+# than failing outright -- it becomes unlocked and gets swept up by the
+# cleanup at the top of the next install/upgrade run.
+if (Test-Path $VenvDir) { Rename-Item -Path $VenvDir -NewName (Split-Path $VenvDirOld -Leaf) }
+Rename-Item -Path $VenvDirNew -NewName (Split-Path $VenvDir -Leaf)
+Remove-Item -Recurse -Force $VenvDirOld -ErrorAction SilentlyContinue
 
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 $LauncherPath = Join-Path $BinDir "ragpilot.cmd"

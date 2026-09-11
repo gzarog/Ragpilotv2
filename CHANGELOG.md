@@ -1251,3 +1251,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     install; a real running daemon is stopped (confirmed via `ps`) before
     its data directory is deleted; `--keep-data` leaves `RAGPILOT_HOME`
     in place.
+
+- Fixed a real-world Windows bug in `ragpilot update install`'s
+  install-script path: it re-runs `install.ps1` from inside the
+  currently-running `venv\Scripts\ragpilot.exe`, which rebuilt that same
+  venv in place -- deleting or overwriting its own running exe file, which
+  Windows refuses (a sharing violation pip surfaced as `ERROR: Could not
+  install packages due to an OSError: [WinError 32] ... being used by
+  another process`). `install.ps1` now builds the new venv side-by-side at
+  `venv.new` and swaps it into place with directory renames at the end
+  (renaming a directory succeeds even with an open file inside it, unlike
+  deleting/overwriting that file directly); a swap left half-done because
+  the old venv is still in use is cleaned up automatically at the start of
+  the next install/upgrade run, once it's no longer locked. install.sh
+  (POSIX) is unaffected -- replacing an open file works there already.
+  Covered by a new Windows CI regression test that holds an exclusive
+  read lock on the installed `ragpilot.exe` (simulating a running process)
+  across a second `install.ps1` run and confirms it still succeeds.
