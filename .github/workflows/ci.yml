@@ -175,6 +175,31 @@ jobs:
       - name: Pytest (benchmark_search)
         run: pytest -m benchmark_search -q -s
 
+  # Optional, non-blocking: measures subprocess wall-clock startup for the
+  # lightweight commands (benchmarks/cli_startup/) and prints a latency
+  # report. Non-blocking for the same reason benchmark-search-tests is:
+  # its numbers are only meaningful on real, unshared hardware, so a busy
+  # CI runner missing a target is not a regression signal. The always-on,
+  # hard-gating regression check for CLI startup is the architectural
+  # import test in the `test` job above (tests/unit/test_cli_startup_imports.py).
+  cli-startup-benchmark-tests:
+    name: CLI startup benchmark (non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install CPU-only torch (Linux runners pull CUDA by default)
+        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+      - name: Install project
+        run: pip install -e ".[dev]"
+      - name: Pytest (cli_startup_benchmark)
+        run: pytest -m cli_startup_benchmark -q -s
+
   # Optional, non-blocking: runs install.sh/install.ps1 exactly as a real
   # user would (curl/irm into a shell), pointed at *this* branch/commit via
   # RAGPILOT_REF, and verifies the resulting `ragpilot` launcher actually

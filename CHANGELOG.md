@@ -950,3 +950,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     *every* file of that type. Changed to AND: a multi-token path query
     now means "these tokens together," which a single-token query (the
     common case) behaves identically under either way.
+
+- CLI performance improvement plan, Phase 1: startup benchmark and
+  heavy-import regression test.
+  - **Benchmark suite** (new top-level `benchmarks/cli_startup/` package,
+    `pytest -m cli_startup_benchmark`): measures real subprocess
+    wall-clock startup (cold + warm p50/p95) for the lightweight commands
+    that should start almost immediately -- `version`, `--help`,
+    `config --help`, `status`, `search --help` -- against warm-start
+    budgets in `targets.py`. Same non-blocking pattern as
+    `benchmarks/search/`: millisecond numbers are reported, not
+    hard-asserted, in CI (a shared/virtualized runner is not real,
+    unshared hardware); `python -m benchmarks.cli_startup --strict` is
+    the form that actually enforces them, for a real machine.
+  - **Architectural regression test**
+    (`tests/unit/test_cli_startup_imports.py`, always-on/default suite):
+    runs each lightweight command in a fresh subprocess and asserts
+    `sys.modules` never picks up Docling/torch/transformers/mcp/openai/
+    anthropic/usearch -- the actual hard CI gate against startup
+    regressing, since exact timing on a shared runner cannot be. Marked
+    `xfail(strict=True)` for now: `ragpilot.cli.main` currently imports
+    every CLI submodule eagerly, which transitively loads the full heavy
+    stack regardless of command; a follow-up phase removes those eager
+    imports and flips this to a plain (passing) assertion.
